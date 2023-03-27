@@ -21,6 +21,7 @@
         // change this to your `beforeBuildCommand`:
         "command": "npm",
         "args": ["run", "build"]
-      }
+      },
+      
     ]
   }

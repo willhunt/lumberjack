@@ -5,6 +5,21 @@
     "version": "0.2.0",
     "configurations": [
       {
+        "name": "Attach to Chrome",
+        "port": 5174,
+        "request": "attach",
+        "type": "chrome",
+        "webRoot": "${workspaceFolder}"
+      },
+      {
+        "name": "Svelte Debug",
+        "request": "launch",
+        "type": "chrome",
+        "url": "http://localhost:5174",
+        "webRoot": "${workspaceFolder}",
+        "preLaunchTask": "ui:dev"
+      },
+      {
         "type": "lldb",
         "request": "launch",
         "name": "Tauri Development Debug",

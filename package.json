@@ -33,6 +33,7 @@
 	"type": "module",
 	"dependencies": {
 		"@tauri-apps/api": "^1.2.0",
+		"glob": "^9.3.2",
 		"material-icons": "^1.13.3"
 	}
 }

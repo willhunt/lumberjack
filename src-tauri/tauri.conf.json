@@ -58,7 +58,8 @@
         "height": 600,
         "resizable": true,
         "title": "lumberjack",
-        "width": 800
+        "width": 800,
+        "theme": "Dark"
       }
     ]
   }
