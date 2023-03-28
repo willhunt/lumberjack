@@ -1,6 +1,4 @@
 <script>
-    export const prerender = true
-    export const ssr = false
     import 'material-icons/iconfont/filled.css';
     // import 'material-icons/iconfont/material-icons.css';
     // import 'material-icons/iconfont/outlined.css';

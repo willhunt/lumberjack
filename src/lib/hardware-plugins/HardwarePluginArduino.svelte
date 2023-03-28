@@ -5,12 +5,12 @@
     let serial_ports = [{name: "None", product: "Unknown", port_type: "Unknown"},]
     let baudrates = [300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 28800, 31250, 38400, 57600, 115200]
   
-    async function list_serial_ports() {
+    async function listSerialPorts() {
         serial_ports = await invoke('list_serial_ports')
     }
 
     onMount(async () => {
-		list_serial_ports()
+		listSerialPorts()
 	});
     
 </script>
