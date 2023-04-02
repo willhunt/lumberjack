@@ -1,26 +1,29 @@
 use serialport;
-use serde::ser::{Serialize, Serializer, SerializeStruct};
+// use serde::ser::{Serialize, Serializer, SerializeStruct};
+use serde::Serialize;
 
+#[derive(Serialize)] // Required for #[tauri::command]
 pub struct PortDetail {
     name: String,
     product: String,
     port_type: String,
 }
 
-impl Serialize for PortDetail {
-    // Required for #[tauri::command], must be able to serialize data types to send to frontend. https://serde.rs/impl-serialize.html
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // 3 is the number of fields in the struct.
-        let mut state = serializer.serialize_struct("PortDetail", 3)?;
-        state.serialize_field("name", &self.name)?;
-        state.serialize_field("product", &self.product)?;
-        state.serialize_field("port_type", &self.port_type)?;
-        state.end()
-    }
-}
+// This is the chumps way to do it instead of #[derive(Serialize)] .......chummmmmmmmmmp
+// impl Serialize for PortDetail {
+//     // Required for #[tauri::command], must be able to serialize data types to send to frontend. https://serde.rs/impl-serialize.html
+//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+//     where
+//         S: Serializer,
+//     {
+//         // 3 is the number of fields in the struct.
+//         let mut state = serializer.serialize_struct("PortDetail", 3)?;
+//         state.serialize_field("name", &self.name)?;
+//         state.serialize_field("product", &self.product)?;
+//         state.serialize_field("port_type", &self.port_type)?;
+//         state.end()
+//     }
+// }
 
 #[tauri::command]
 pub fn list_serial_ports() -> Vec<PortDetail> {

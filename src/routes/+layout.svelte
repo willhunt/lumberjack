@@ -1,16 +1,42 @@
-<script>
+<script lang="ts">
+    import { onMount } from 'svelte'
     import 'material-icons/iconfont/filled.css';
     // import 'material-icons/iconfont/material-icons.css';
     // import 'material-icons/iconfont/outlined.css';
+    import { config_store } from '$lib/stores';
+    import { loadAppConfig } from '$lib/tools'
+    import { resourceDir, resolve } from '@tauri-apps/api/path'
+    import type { ConfigStore, Device, Dashboard } from '$lib/types'
+
+    let devices: Device[] = []
+    let dashboards: Dashboard[] = []
+
+    
 
     let explorer_display = 'inline-block'
     function hideExplorer() {
         explorer_display = explorer_display == 'inline-block' ? 'none' : 'inline-block'
     }
+    function showConfig() {
+        location.href="configuration"
+    }
 
     function addDevice() {
         location.href="add_device"
     }
+    function addLayout() {
+        location.href="dashboard"
+    }
+
+    onMount(async () => {
+        const resources_path = await resourceDir();
+        const mock_path = await resolve(resources_path, 'examples', 'mock_config.json')
+        loadAppConfig(mock_path)
+        config_store.subscribe((value: ConfigStore) => {
+            devices = value.devices
+            dashboards = value.dashboards
+        })
+	});
 </script>
 
 <style>
@@ -63,6 +89,22 @@
         background-color: #2d2d2e;
         color: #c4cccc;
         display: flex;
+        vertical-align: middle;
+    }
+    .explorer-section-item {
+        padding-left: 22px;
+        padding-right: 22px;
+        padding-top: 5px;
+        padding-bottom: 5px;
+        color: #c4cccc;
+        display: flex;
+        font-size: 12px;
+        vertical-align: middle;
+    }
+    .active-icon {
+        display: flex;
+        vertical-align: middle;
+        font-size: 16px;
     }
     .section-icon {
         font-size: 16px;
@@ -81,6 +123,7 @@
 </style>
 <div class="vertnav">
     <button class="explorer-button" on:click={hideExplorer}><span class="vertnav-icon material-icons">input</span></button>
+    <button class="explorer-button" on:click={showConfig}><span class="vertnav-icon material-icons">settings</span></button>
     
     <!-- <object class="vertnav-button" data="/input_FILL0_wght400_GRAD0_opsz48.svg" style="color: white;" title="input"/> -->
     <!-- <img class="vertnav-button" src="/input_FILL0_wght400_GRAD0_opsz48.svg" alt="Input"/> -->
@@ -93,10 +136,29 @@
             <button class="explorer-button" on:click={addDevice}><span class="section-icon material-icons">add_circle</span></button>
         </div>
     </div>
+    {#each devices as device}
+        <div class="explorer-section-item">
+            <div><span class="material-icons  active-icon">chevron_right</span></div>
+            <div>{device.name}</div>
+            <div class="flexbox-push"><span class="material-icons active-icon">noise_control_off</span></div>
+        </div>
+    {/each}
+    <div class="explorer-section-header">
+        <div>Layouts</div>
+        <div class="flexbox-push">
+            <button class="explorer-button" on:click={addLayout}><span class="section-icon material-icons">add_circle</span></button>
+        </div>
+    </div>
+    {#each dashboards as dashboard}
+        <div class="explorer-section-item">
+            <div><span class="material-icons  active-icon">chevron_right</span></div>
+            <div>{dashboard.name}</div>
+            <div class="flexbox-push"><span class="material-icons active-icon">noise_control_off</span></div>
+        </div>
+    {/each}
 </div>
 <!-- <div class="resize-handle--x" data-target="aside"></div> -->
 <div class="viewer">
     <slot />
-    <!-- Hello, this is my app -->
 </div>
     

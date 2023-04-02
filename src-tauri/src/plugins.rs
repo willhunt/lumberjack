@@ -1,22 +1,26 @@
-use crate::hardware_plugins::plugin_common::{ PluginManager };
-use crate::hardware_plugins::mock_sensor::{ MockSensor };
+use crate::hardware_plugins::plugin_common::{ PluginManager, Channel };
+use crate::hardware_plugins::mock_sensor;
 
 
 #[tauri::command]
 pub fn list_hardware_plugins() -> Vec<String> {
-    let plugin_manager = init_hardware_plugins();
-    // Do this dumbly for now
-    let plugin_names = plugin_manager.get_info(); //vec![String::from("DDummy")];
-    plugin_names
+    let plugin_manager = find_hardware_plugins();
+    let plugin_names = plugin_manager.get_plugin_names(); //vec![String::from("Dummy")];
+    return plugin_names;
 }
 
-fn init_hardware_plugins() -> PluginManager {
+#[tauri::command]
+pub fn read_hardware() -> Vec<Channel> {
+    let plugin_manager = find_hardware_plugins();
+    let channels = plugin_manager.read_hardware(); //vec![String::from("Dummy")];
+    return channels;
+}
+
+fn find_hardware_plugins() -> PluginManager {
     let plugin_manager = PluginManager {
         plugins: vec![
-            Box::new(MockSensor {
-                frequency: 100,
-            })
+            Box::new(mock_sensor::build_plugin())
         ],
     };
-    plugin_manager
+    return plugin_manager;
 }

@@ -11,7 +11,13 @@
   },
   "tauri": {
     "allowlist": {
-      "all": false
+      "path": {
+        "all": true
+      },
+      "fs": {
+        "all": true,
+        "scope": ["$RESOURCE/examples/*", "$HOME/*"]
+      }
     },
     "bundle": {
       "active": true,
@@ -28,7 +34,7 @@
         "icons/icon.icns",
         "icons/icon.ico"
       ],
-      "identifier": "lumberjack.app",
+      "identifier": "app.lumberjack",
       "longDescription": "",
       "macOS": {
         "entitlements": null,
@@ -37,7 +43,9 @@
         "providerShortName": null,
         "signingIdentity": null
       },
-      "resources": [],
+      "resources": [
+        "./examples/*"
+      ],
       "shortDescription": "",
       "targets": "all",
       "windows": {

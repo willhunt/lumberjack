@@ -1,0 +1,37 @@
+{
+    "devices": [
+        {
+            "name": "Mock Sensor",
+            "plugin": "MockSensor",
+            "channels": [
+                {
+                    "name": "Analog 1",
+                    "active": true,
+                    "units": "Pa"
+                },
+
+                {
+                    "name": "Analog 2",
+                    "active": true,
+                    "units": "l/min"
+                }         
+            ]
+        }
+    ],
+    "dashboards": [
+        {
+            "name": "Mock Dashboard",
+            "widgets": [
+                {
+                    "name": "numeric",
+                    "channels": ["Analog 1"]
+                },
+                {
+                    "name": "numeric",
+                    "channels": ["Analog 2"]
+                }
+            ]
+        }
+    ]
+
+}
