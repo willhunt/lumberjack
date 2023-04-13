@@ -9,12 +9,12 @@ pub fn list_hardware_plugins() -> Vec<String> {
     return plugin_names;
 }
 
-#[tauri::command]
-pub fn read_hardware() -> Vec<Channel> {
-    let plugin_manager = find_hardware_plugins();
-    let channels = plugin_manager.read_hardware(); //vec![String::from("Dummy")];
-    return channels;
-}
+// #[tauri::command]
+// pub fn read_hardware() -> Vec<Channel> {
+//     let plugin_manager = find_hardware_plugins();
+//     let channels = plugin_manager.read_hardware(); //vec![String::from("Dummy")];
+//     return channels;
+// }
 
 fn find_hardware_plugins() -> PluginManager {
     let plugin_manager = PluginManager {

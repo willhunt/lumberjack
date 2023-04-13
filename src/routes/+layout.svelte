@@ -3,30 +3,46 @@
     import 'material-icons/iconfont/filled.css';
     // import 'material-icons/iconfont/material-icons.css';
     // import 'material-icons/iconfont/outlined.css';
-    import { config_store } from '$lib/stores';
+    import { config_store, nav_width_store } from '$lib/stores';
+    import { goto } from '$app/navigation'
     import { loadAppConfig } from '$lib/tools'
     import { resourceDir, resolve } from '@tauri-apps/api/path'
     import type { ConfigStore, Device, Dashboard } from '$lib/types'
+    import ExplorerItemDashboard from '$lib/explorer-item-dashboard/ExplorerItemDashboard.svelte';
+    let explorer_menu
 
-    let devices: Device[] = []
-    let dashboards: Dashboard[] = []
+    // let devices: Device[] = []
+    // let dashboards: Dashboard[] = []
 
     let explorer_display = 'inline-block'
     function hideExplorer() {
         explorer_display = explorer_display == 'inline-block' ? 'none' : 'inline-block'
     }
     function showConfig() {
-        location.href="configuration"
+        goto("/configuration")
     }
 
     function addDevice() {
-        location.href="add_device"
+        // Creare new device
+        let name = "New device"
+        let short_name = name.replace(/\s+/g, '-').toLowerCase();  // lowercase with dashes
+        $config_store.devices[short_name] = {name: name,  plugin: "", "channels": []}
+        goto("/device/" + short_name)
     }
-    function addLayout() {
-        location.href="dashboard"
+    function openDevice (name: string) {
+        goto("/device/" +  name)
     }
 
-    let nav_width = 300 // Navigation bar width, px  Maybe set this up in the store.......
+    function addDashboard() {
+         // Creare new device
+        let name = "New dashboard"
+        // let short_name = name.replace(/\s+/g, '-').toLowerCase();  // lowercase with dashes
+        $config_store.dashboards.push({name: name, widgets: []})
+        $config_store = $config_store  // Need this to update view
+        goto("/edit_dashboard/" + ($config_store.dashboards.length - 1).toString())
+    }
+
+
     let nav_resize_active = false
     function startResizeNav(event: MouseEvent) {
         nav_resize_active = true
@@ -34,9 +50,9 @@
     function resizeNav(event: MouseEvent) {
         if (nav_resize_active) {
             event.preventDefault()
-            let new_width = nav_width + event.movementX
+            let new_width = $nav_width_store + event.movementX
             if (new_width > 200 && new_width < 500) {
-                nav_width = new_width
+                nav_width_store.set(new_width)
             }
         }
     }
@@ -48,10 +64,10 @@
         const resources_path = await resourceDir();
         const mock_path = await resolve(resources_path, 'examples', 'mock_config.json')
         loadAppConfig(mock_path)
-        config_store.subscribe((value: ConfigStore) => {
-            devices = value.devices
-            dashboards = value.dashboards
-        })
+        // config_store.subscribe((value: ConfigStore) => {
+        //     devices = value.devices
+        //     dashboards = value.dashboards
+        // })
 	});
 </script>
 
@@ -108,7 +124,7 @@
         display: flex;
         vertical-align: middle;
     }
-    .explorer-section-item {
+    :global(.explorer-section-item) {
         padding-left: 22px;
         padding-right: 22px;
         padding-top: 5px;
@@ -118,7 +134,7 @@
         font-size: 12px;
         vertical-align: middle;
     }
-    .active-icon {
+    :global(.active-icon) {
         display: flex;
         vertical-align: middle;
         font-size: 16px;
@@ -127,8 +143,15 @@
         font-size: 16px;
         color: #c4cccc;
     }
-    .flexbox-push {
+    :global(.flexbox-push) {
         margin-left: auto;
+    }
+    :global(.hidden-button) {
+        background-color: inherit;
+        border: none;
+        color: inherit;
+        font-size: inherit;
+        cursor: pointer;
     }
     .resize-handle {
         position: fixed;
@@ -148,14 +171,12 @@
     }
     
 </style>
-<div class="layout" on:mousemove="{resizeNav}" on:mouseup="{stopResizeNav}" on:mouseleave="{stopResizeNav}" style=" --nav-width:{nav_width}; height:100%">
+<!-- <ExplorerContextMenu bind:this={explorer_menu}  /> -->
+<div class="layout" on:mousemove="{resizeNav}" on:mouseup="{stopResizeNav}" on:mouseleave="{stopResizeNav}" style=" --nav-width:{$nav_width_store}; height:100%">
     <div class="sidebar" >
         <div class="vertnav">
             <button class="explorer-button" on:click={hideExplorer}><span class="vertnav-icon material-icons">input</span></button>
             <button class="explorer-button" on:click={showConfig}><span class="vertnav-icon material-icons">settings</span></button>
-            
-            <!-- <object class="vertnav-button" data="/input_FILL0_wght400_GRAD0_opsz48.svg" style="color: white;" title="input"/> -->
-            <!-- <img class="vertnav-button" src="/input_FILL0_wght400_GRAD0_opsz48.svg" alt="Input"/> -->
         </div>
         <div class="explorer" style="--explorer_display: {explorer_display};">
             <div class="explorer-title">EXPLORER</div>
@@ -165,31 +186,31 @@
                     <button class="explorer-button" on:click={addDevice}><span class="section-icon material-icons">add_circle</span></button>
                 </div>
             </div>
-            {#each devices as device}
+            {#each Object.entries($config_store.devices) as [devicename, device]}
                 <div class="explorer-section-item">
                     <div><span class="material-icons  active-icon">chevron_right</span></div>
-                    <div>{device.name}</div>
+                    <button class="hidden-button" on:click={() => openDevice(devicename)}>{device.name}</button>
                     <div class="flexbox-push"><span class="material-icons active-icon">noise_control_off</span></div>
                 </div>
             {/each}
             <div class="explorer-section-header">
-                <div>Layouts</div>
+                <div>Dashboards</div>
                 <div class="flexbox-push">
-                    <button class="explorer-button" on:click={addLayout}><span class="section-icon material-icons">add_circle</span></button>
+                    <button class="explorer-button" on:click={addDashboard}><span class="section-icon material-icons">add_circle</span></button>
                 </div>
             </div>
-            {#each dashboards as dashboard}
-                <div class="explorer-section-item">
-                    <div><span class="material-icons  active-icon">chevron_right</span></div>
-                    <div>{dashboard.name}</div>
+            {#each $config_store.dashboards as dashboard, i}
+                <ExplorerItemDashboard dashboard_index={i} dashboard_name={dashboard.name}/>
+                <!-- <div class="explorer-section-item">
+                    <div><span class="material-icons active-icon">chevron_right</span></div>
+                    <button class="hidden-button" on:click={() => openDashboard(i)} on:contextmenu|preventDefault={explorer_menu.onRightClick}>{dashboard.name}</button>
                     <div class="flexbox-push"><span class="material-icons active-icon">noise_control_off</span></div>
-                </div>
+                </div> -->
             {/each}
         </div>
         <div class="resize-handle" on:mousedown="{startResizeNav}"></div>
     </div>
-        <div class="viewer">
+    <div class="viewer">
         <slot />
     </div>
 </div>
-    

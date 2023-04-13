@@ -32,7 +32,7 @@
                 {/each}
             </select>
         </label>
-        <button class="inline-button" on:click="{list_serial_ports}"><span class="inline-icon material-icons">refresh</span></button>
+        <button class="inline-button" on:click="{listSerialPorts}"><span class="inline-icon material-icons">refresh</span></button>
     </div>
     <div class="form-line">
         <label>

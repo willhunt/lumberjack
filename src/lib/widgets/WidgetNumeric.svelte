@@ -4,12 +4,12 @@
     import { invoke } from '@tauri-apps/api/tauri'
     import type { ConfigStore } from '$lib/types'
     import { config_store } from '$lib/stores';
-	import { goto } from '$app/navigation';
 
-    let config_text = ""
+    export let channel: string
+    let value = 0;
 
     config_store.subscribe((value: ConfigStore) => {
-        config_text = JSON.stringify(value, null, 2)
+
     })
 
     onMount(async () => {
@@ -20,12 +20,19 @@
 </script>
 
 <style>
-    .code-block {
-
+    .widget {
+        border-style: solid;
+        border-radius: 5px;
+        padding: 5px;
+        margin: 5px;
+    }
+    .numeric-display {
+        font-size: large;
     }
 </style>
 
-<button class="page-button" on:click={() => goto("/")}><span class="material-icons">arrow_circle_left</span></button>
-<h1>Configuration</h1>
-<pre class="code-block"><code>{config_text}</code></pre>
+<div class="widget">
+    <div class="numeric-display">{value}</div>
+    <div class="channel">({channel})</div>
+</div>
 

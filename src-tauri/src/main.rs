@@ -10,7 +10,7 @@ mod hardware_plugins;
 mod plugins;
 mod load;
 
-use std::path::Path;
+// use std::path::Path;
 
 fn main() {
     // let config_path = Path::new("./examples/mock.json");
@@ -19,7 +19,7 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![hardware_serial::list_serial_ports])
         .invoke_handler(tauri::generate_handler![plugins::list_hardware_plugins])
-        .invoke_handler(tauri::generate_handler![plugins::read_hardware])
+        // .invoke_handler(tauri::generate_handler![plugins::read_hardware])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

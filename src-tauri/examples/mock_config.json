@@ -1,6 +1,6 @@
 {
-    "devices": [
-        {
+    "devices": {
+        "mock-sensor": {
             "name": "Mock Sensor",
             "plugin": "MockSensor",
             "channels": [
@@ -9,7 +9,6 @@
                     "active": true,
                     "units": "Pa"
                 },
-
                 {
                     "name": "Analog 2",
                     "active": true,
@@ -17,7 +16,7 @@
                 }         
             ]
         }
-    ],
+    },
     "dashboards": [
         {
             "name": "Mock Dashboard",
