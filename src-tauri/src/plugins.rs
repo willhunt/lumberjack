@@ -16,7 +16,7 @@ pub fn list_hardware_plugins() -> Vec<String> {
 //     return channels;
 // }
 
-fn find_hardware_plugins() -> PluginManager {
+pub fn find_hardware_plugins() -> PluginManager {
     let plugin_manager = PluginManager {
         plugins: vec![
             Box::new(mock_sensor::build_plugin())

@@ -9,3 +9,9 @@ Data aquisition software.
 
 # Hardware
 Initially the focus will be on logging from Arduino hardware
+
+# Run Development
+'''ps
+cd .\src-tauri\
+cargo tauri dev
+'''
