@@ -2,7 +2,7 @@ use serialport;
 use chrono;
 
 const N_DATAPOINTS: usize = 1000;
-const WRITE_INTERVAL: chrono::TimeDelta = chrono::TimeDelta::new(10, 0).unwrap();
+const WRITE_INTERVAL: chrono::TimeDelta = chrono::TimeDelta::seconds(10);
 
 #[derive(Copy)]
 #[derive(Clone)]
@@ -34,7 +34,7 @@ impl Channel {
         }
     }
 
-    pub fn add_datapoint(&self, datapoint: DataPoint) {
+    pub fn add_datapoint(&mut self, datapoint: DataPoint) {
         if self.datapoint_index > N_DATAPOINTS {
             self.write_to_file();
         }
@@ -54,7 +54,7 @@ impl Channel {
         return false;
     }
 
-    pub fn write_to_file(&self) {
+    pub fn write_to_file(&mut self) {
 
 
         // Clear datapoints and reset index
@@ -79,7 +79,7 @@ pub struct Device {
 }
 
 impl Device {
-    fn print_latest(&self) {
+    pub fn print_latest(&self) {
         println!("Latest reading from device: {}", &self.name);
         for channel in &self.channels {
             if let Some(datapoint) = channel.datapoint_last {

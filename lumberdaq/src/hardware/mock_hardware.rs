@@ -27,6 +27,10 @@ impl DataAquisition for MockDevice {
             channel.add_datapoint(datapoint);
         }
     }
+
+    fn print_latest(&self) {
+        self.device.print_latest();
+    }
 }
 
 impl MockDevice {

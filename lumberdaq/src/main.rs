@@ -19,10 +19,9 @@ fn main() {
 
     loop {
         // Read devices
-        for mut device in daq.devices.iter_mut() {
-            device.read();
-            // device.device.print_latest();
-            println!("Device read: {}", device.device.name);
+        for dev in daq.devices.iter_mut() {
+            dev.read();
+            dev.print_latest();
         }
         // Wait
         thread::sleep(time::Duration::from_millis(1000));
