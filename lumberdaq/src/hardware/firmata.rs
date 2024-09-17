@@ -1,5 +1,6 @@
-use crate::devices::{ Device, DeviceType };
-use serialport;
+use crate::datapoint::DataPoint;
+use crate::channel::Channel;
+use crate::device::{ Device, DeviceType, DataAquisition };
 
 pub fn create_device() -> Device {
     let port = serialport::SerialPortInfo {

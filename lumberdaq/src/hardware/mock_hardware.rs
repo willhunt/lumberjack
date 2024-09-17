@@ -1,5 +1,6 @@
-use crate::devices::{ Channel, Device, DeviceType, DataPoint };
-use crate::daq::DataAquisition;
+use crate::datapoint::DataPoint;
+use crate::channel::Channel;
+use crate::device::{ Device, DeviceType, DataAquisition };
 use serialport;
 use chrono;
 use rand::random;
@@ -24,8 +25,15 @@ impl DataAquisition for MockDevice {
                     value: 100.0,
                 };
             }
-            channel.add_datapoint(datapoint);
+            match channel.add_datapoint(datapoint) {
+                Err(e) => println!("{e}"),
+                Ok(()) => (),
+            }
         }
+    }
+
+    fn check_and_write(&mut self) {
+        self.device.check_and_write();
     }
 
     fn print_latest(&self) {

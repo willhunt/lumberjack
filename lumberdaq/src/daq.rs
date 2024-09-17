@@ -1,10 +1,4 @@
-
-
-pub trait DataAquisition {
-    fn read(&mut self);
-    fn print_latest(&self);
-}
-
+use crate::device::DataAquisition;
 
 pub struct Daq {
     pub devices: Vec<Box<dyn DataAquisition>>,

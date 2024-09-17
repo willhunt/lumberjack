@@ -1,9 +1,10 @@
 mod hardware;
-use hardware::{ mock_hardware, firmata };
+use hardware::mock_hardware;
 use std::{thread, time};
 
-mod devices;
-
+mod datapoint;
+mod channel;
+mod device;
 mod daq;
 
 fn main() {
@@ -22,8 +23,9 @@ fn main() {
         for dev in daq.devices.iter_mut() {
             dev.read();
             dev.print_latest();
+            dev.check_and_write();
         }
         // Wait
-        thread::sleep(time::Duration::from_millis(1000));
+        thread::sleep(time::Duration::from_millis(500));
     }
 }
