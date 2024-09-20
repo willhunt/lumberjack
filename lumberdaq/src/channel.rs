@@ -4,14 +4,22 @@ const N_DATAPOINTS: usize = 10;
 const WRITE_INTERVAL: chrono::TimeDelta = chrono::TimeDelta::seconds(60);
 
 pub enum WriteStatus {
-    YesToWrite,
+    // YesToWrite,
     NoToWrite,
     WriteComplete,
 }
 
-pub struct Channel {
-    pub name: String,
+pub trait ChannelDataAquisition {
+    fn read(&mut self);
+    fn check_and_write(&mut self);
+}
+
+pub struct ChannelConfig {
     pub subport: String,
+}
+
+pub struct ChannelData {
+    pub name: String,
     pub unit: String,
     datapoints: [Option<DataPoint>; N_DATAPOINTS],//Vec<DataPoint>,
     pub datapoint_last: Option<DataPoint>,
@@ -19,11 +27,10 @@ pub struct Channel {
     last_write: chrono::DateTime<chrono::Utc>,
 }
 
-impl Channel {
-    pub fn new(name: String, subport: String, unit: String) -> Channel {
-        Channel {
+impl ChannelData {
+    pub fn new(name: String, unit: String) -> ChannelData {
+        ChannelData {
             name: name,
-            subport: subport,
             unit: unit,
             datapoints: [None; N_DATAPOINTS],
             datapoint_last: None,
@@ -64,8 +71,8 @@ impl Channel {
     }
 
     pub fn write(&mut self) -> WriteStatus {
-
-
+        // Write data to file
+        // ...
         // Clear datapoints and reset index
         self.datapoint_index = 0;
         self.datapoints = [None; N_DATAPOINTS];

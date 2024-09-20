@@ -1,5 +1,5 @@
 use crate::datapoint::DataPoint;
-use crate::channel::Channel;
+use crate::channel::ChannelData;
 use crate::device::{ Device, DeviceType, DataAquisition };
 use serialport;
 use chrono;
@@ -41,19 +41,31 @@ impl DataAquisition for MockDevice {
     }
 }
 
+pub struct RandomChannel {
+    channel_data: ChannelData,
+}
+impl RandomChannel {
+    pub fn read(&self) -> DataPoint {
+        DataPoint {
+            datetime: chrono::Utc::now(),
+            value: random(),
+        }
+    }
+}
+
 impl MockDevice {
     pub fn new() -> MockDevice {
         let port = serialport::SerialPortInfo {
             port_name: "COMx".to_string(),
             port_type: serialport::SerialPortType::Unknown
         };
-        let channel1 = Channel::new("contant".to_string(), "a0".to_string(), "-".to_string());
-        let channel2 = Channel::new("random".to_string(), "a1".to_string(), "-".to_string());
+        let channeldata1 = ChannelData::new("contant".to_string(), "a0".to_string());
+        let channeldata2 = ChannelData::new("random".to_string(), "a1".to_string());
     
         let device = Device {
             name: "Mock device".to_string(),
             port: port,
-            channels: vec![channel1, channel2],
+            channels: vec![channeldata1, channeldata2],
             device_type: DeviceType::Mock,
         };
         MockDevice {

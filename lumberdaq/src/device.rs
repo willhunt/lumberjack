@@ -1,4 +1,4 @@
-use crate::channel::Channel;
+use crate::channel::ChannelData;
 use serialport;
 
 pub trait DataAquisition {
@@ -18,7 +18,7 @@ pub enum DeviceType {
 pub struct Device {
     pub name: String,
     pub port: serialport::SerialPortInfo,
-    pub channels: Vec<Channel>,
+    pub channels: Vec<ChannelData>,
     pub device_type: DeviceType,
 }
 
