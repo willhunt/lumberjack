@@ -2,9 +2,9 @@ use crate::channel::Channel;
 
 pub trait DeviceDataAquisition {
     fn connect(&self);
-    // fn read(&mut self);
-    // fn check_and_write(&mut self);
-    // fn print_latest(&self);
+    // Including read here would provide more flexibility, for example when multiple channels
+    // need to be read at once. The downside is more boiler plate code. Leave for now.
+    // fn read(&mut self);  
 }
 
 // #[allow(dead_code)]
