@@ -1,5 +1,12 @@
-use crate::device::DataAquisition;
+use crate::device::Device;
 
 pub struct Daq {
-    pub devices: Vec<Box<dyn DataAquisition>>,
+    pub devices: Vec<Device>,
+}
+impl Daq {
+    pub fn connect(&self) {
+        for device in self.devices.iter() {
+            device.device_config.connect();
+        }
+    }
 }

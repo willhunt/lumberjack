@@ -9,14 +9,18 @@ mod daq;
 
 fn main() {
     println!("Lets create some devices");
-    // let firmata_device = firmata::create_device();
-    // println!("Device created: {}", firmata_device.name);
+    let mut mock_device = mock_hardware::create_device("Test device".to_string());
+    mock_hardware::add_channel_constant(&mut mock_device, "Constant 1".to_string());
+    mock_hardware::add_channel_random(&mut mock_device, "Random 1".to_string());
 
     let mut daq = daq::Daq{
         devices: vec![
-            Box::new(mock_hardware::MockDevice::new())
+            mock_device
         ]
     };
+
+    // Connect to devices
+    daq.connect();
 
     loop {
         // Read devices

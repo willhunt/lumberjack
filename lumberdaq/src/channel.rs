@@ -10,12 +10,7 @@ pub enum WriteStatus {
 }
 
 pub trait ChannelDataAquisition {
-    fn read(&mut self);
-    fn check_and_write(&mut self);
-}
-
-pub struct ChannelConfig {
-    pub subport: String,
+    fn read(&self) -> DataPoint;
 }
 
 pub struct ChannelData {
@@ -78,5 +73,18 @@ impl ChannelData {
         self.datapoints = [None; N_DATAPOINTS];
         self.last_write = chrono::Utc::now();
         WriteStatus::WriteComplete
+    }
+}
+
+// Could try parent Channel type that then holds data and config. The config would then have traits read. This might make it less inheritancy
+pub struct Channel {
+    pub channel_data: ChannelData,
+    pub channel_config: Box<dyn ChannelDataAquisition>,
+}
+
+impl Channel {
+    pub fn read(&mut self) -> Result<(), &'static str> {
+        let datapoint = self.channel_config.read();
+        self.channel_data.add_datapoint(datapoint)
     }
 }

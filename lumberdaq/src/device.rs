@@ -1,38 +1,52 @@
-use crate::channel::ChannelData;
-use serialport;
+use crate::channel::Channel;
 
-pub trait DataAquisition {
-    fn read(&mut self);
-    fn check_and_write(&mut self);
-    fn print_latest(&self);
+pub trait DeviceDataAquisition {
+    fn connect(&self);
+    // fn read(&mut self);
+    // fn check_and_write(&mut self);
+    // fn print_latest(&self);
 }
 
-#[allow(dead_code)]
-pub enum DeviceType {
-    Usb {
-        baudrate: i32,
-    },
-    Mock,
-}
+// #[allow(dead_code)]
+// pub enum DeviceType {
+//     Usb {
+//         baudrate: i32,
+//     },
+//     Mock,
+// }
 
 pub struct Device {
     pub name: String,
-    pub port: serialport::SerialPortInfo,
-    pub channels: Vec<ChannelData>,
-    pub device_type: DeviceType,
+    pub description: String,
+    pub channels: Vec<Channel>,
+    // pub device_type: DeviceType,
+    pub device_config: Box<dyn DeviceDataAquisition>,
 }
 
 impl Device {
+    pub fn add_channel(&mut self, channel: Channel) {
+        self.channels.push(channel);
+    }
+
     pub fn print_latest(&self) {
         println!("Latest reading from device: {}", &self.name);
         for channel in &self.channels {
-            println!("    {}", channel.latest_as_string());
+            println!("    {}", channel.channel_data.latest_as_string());
         }
     }
 
     pub fn check_and_write(&mut self) {
         for channel in &mut self.channels {
-            channel.check_and_write();
+            channel.channel_data.check_and_write();
+        }
+    }
+
+    pub fn read(&mut self) {
+        for channel in &mut self.channels {
+            match channel.read() {
+                Err(e) => println!("{e}"),
+                Ok(()) => (),
+            }
         }
     }
 }
