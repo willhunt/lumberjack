@@ -25,7 +25,7 @@ fn main() {
     loop {
         // Read devices
         for dev in daq.devices.iter_mut() {
-            dev.read();
+            dev.device_config.read(&mut dev.channels);
             dev.print_latest();
             dev.check_and_write();
         }

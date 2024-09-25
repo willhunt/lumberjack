@@ -2,9 +2,14 @@ use crate::channel::Channel;
 
 pub trait DeviceDataAquisition {
     fn connect(&self);
-    // Including read here would provide more flexibility, for example when multiple channels
-    // need to be read at once. The downside is more boiler plate code. Leave for now.
-    // fn read(&mut self);  
+    fn read(&self, channels: &mut Vec<Channel>) {
+        for channel in channels.iter_mut() {
+            match channel.read() {
+                Err(e) => println!("{e}"),
+                Ok(()) => (),
+            }
+        }
+    }
 }
 
 // #[allow(dead_code)]
@@ -41,12 +46,13 @@ impl Device {
         }
     }
 
-    pub fn read(&mut self) {
-        for channel in &mut self.channels {
-            match channel.read() {
-                Err(e) => println!("{e}"),
-                Ok(()) => (),
-            }
-        }
-    }
+    // Moved this to trait default. Leaving for now, if other strategy works, delete.
+    // pub fn read(&mut self) {
+    //     for channel in &mut self.channels {
+    //         match channel.read() {
+    //             Err(e) => println!("{e}"),
+    //             Ok(()) => (),
+    //         }
+    //     }
+    // }
 }
