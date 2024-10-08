@@ -46,6 +46,8 @@ impl Device {
         }
     }
 
+    // pub fn add_to_hdf(&self, file: )
+
     // Moved this to trait default. Leaving for now, if other strategy works, delete.
     // pub fn read(&mut self) {
     //     for channel in &mut self.channels {

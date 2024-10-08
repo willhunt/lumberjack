@@ -16,6 +16,7 @@ pub trait ChannelDataAquisition {
 pub struct ChannelData {
     pub name: String,
     pub unit: String,
+    pub description: String,
     datapoints: [Option<DataPoint>; N_DATAPOINTS],//Vec<DataPoint>,
     pub datapoint_last: Option<DataPoint>,
     datapoint_index: usize,
@@ -23,10 +24,11 @@ pub struct ChannelData {
 }
 
 impl ChannelData {
-    pub fn new(name: String, unit: String) -> ChannelData {
+    pub fn new(name: String, unit: String, description: String) -> ChannelData {
         ChannelData {
             name: name,
             unit: unit,
+            description: description,
             datapoints: [None; N_DATAPOINTS],
             datapoint_last: None,
             datapoint_index: 0,

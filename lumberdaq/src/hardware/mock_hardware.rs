@@ -47,7 +47,7 @@ impl ChannelDataAquisition for RandomChannelConfig {
 }
 pub fn add_channel_random(device: &mut Device, name: String) {
     let channel = Channel {
-        channel_data: ChannelData::new(name, "kW".to_string()),
+        channel_data: ChannelData::new(name, "kW".to_string(), "Random number generator".to_string()),
         channel_config: Box::new(RandomChannelConfig{}),
     };
     device.add_channel(channel);
@@ -67,7 +67,7 @@ impl ChannelDataAquisition for ConstantChannelConfig {
 }
 pub fn add_channel_constant(device: &mut Device, name: String) {
     let channel = Channel {
-        channel_data: ChannelData::new(name, "degC".to_string()),
+        channel_data: ChannelData::new(name, "degC".to_string(), "Constant number".to_string()),
         channel_config: Box::new(ConstantChannelConfig{port: "a0".to_string()}),
     };
     device.add_channel(channel);
