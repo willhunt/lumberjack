@@ -1,5 +1,6 @@
+use crate::Result;
 use crate::datapoint::DataPoint;
-use crate::channel::{ Channel, ChannelData, ChannelDataAquisition };
+use crate::channel::{ Channel, ChannelData, ChannelDataAquisition, ChannelInfo };
 use crate::device::{ Device, DeviceDataAquisition };
 use serialport;
 use chrono;
@@ -38,19 +39,21 @@ impl DeviceDataAquisition for MockConfig {
 pub struct RandomChannelConfig {
 }
 impl ChannelDataAquisition for RandomChannelConfig {
-    fn read(&self) -> DataPoint {
-        DataPoint {
+    fn read(&self) -> Vec<DataPoint> {
+        vec![DataPoint {
             datetime: chrono::Utc::now(),
             value: random(),
-        }
+        }]
     }
 }
-pub fn add_channel_random(device: &mut Device, name: String) {
+pub fn add_channel_random(device: &mut Device, name: String) -> Result<()>{
     let channel = Channel {
-        channel_data: ChannelData::new(name, "kW".to_string(), "Random number generator".to_string()),
+        channel_info: ChannelInfo::new(name, "kW".to_string(), "Random number generator".to_string()),
+        channel_data: ChannelData::new(),
         channel_config: Box::new(RandomChannelConfig{}),
     };
-    device.add_channel(channel);
+    device.add_channel(channel)?;
+    Ok(())
 }
 
 pub struct ConstantChannelConfig {
@@ -58,17 +61,19 @@ pub struct ConstantChannelConfig {
     port: String,
 }
 impl ChannelDataAquisition for ConstantChannelConfig {
-    fn read(&self) -> DataPoint {
-        DataPoint {
+    fn read(&self) -> Vec<DataPoint> {
+        vec![DataPoint {
             datetime: chrono::Utc::now(),
             value: 10.0,
-        }
+        }]
     }
 }
-pub fn add_channel_constant(device: &mut Device, name: String) {
+pub fn add_channel_constant(device: &mut Device, name: String) -> Result<()>{
     let channel = Channel {
-        channel_data: ChannelData::new(name, "degC".to_string(), "Constant number".to_string()),
+        channel_info: ChannelInfo::new(name, "degC".to_string(), "Constant number".to_string()),
+        channel_data: ChannelData::new(),
         channel_config: Box::new(ConstantChannelConfig{port: "a0".to_string()}),
     };
-    device.add_channel(channel);
+    device.add_channel(channel)?;
+    Ok(())
 }

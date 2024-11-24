@@ -1,4 +1,6 @@
+use crate::Result;
 use crate::channel::Channel;
+use serde::{Deserialize, Serialize};
 
 pub trait DeviceDataAquisition {
     fn connect(&self);
@@ -29,23 +31,30 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn add_channel(&mut self, channel: Channel) {
+    pub fn add_channel(&mut self, channel: Channel) -> Result<()> {
+        for existing_channel in self.channels.iter() {
+            if existing_channel.channel_info.name == channel.channel_info.name {
+                return Err("Channel name must be unique".into());
+            }
+        }
         self.channels.push(channel);
+        Ok(())
     }
 
     pub fn print_latest(&self) {
         println!("Latest reading from device: {}", &self.name);
         for channel in &self.channels {
-            println!("    {}", channel.channel_data.latest_as_string());
+            println!("    {}", channel.latest_as_string());
         }
     }
 
-    pub fn check_and_write(&mut self) {
+    pub fn write(&mut self, wtr: &mut csv::Writer<std::fs::File>) -> Result<()>{
         for channel in &mut self.channels {
-            channel.channel_data.check_and_write();
+            channel.write(wtr, &self.name)?;
         }
+        Ok(())
     }
-
+    
     // pub fn add_to_hdf(&self, file: )
 
     // Moved this to trait default. Leaving for now, if other strategy works, delete.
