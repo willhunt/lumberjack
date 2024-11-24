@@ -1,17 +1,19 @@
 use crate::Result;
 use crate::datapoint::DataPoint;
 use crate::channel::{ Channel, ChannelData, ChannelDataAquisition, ChannelInfo };
-use crate::device::{ Device, DeviceDataAquisition };
+use crate::device::{ Device, DeviceDataAquisition, DeviceInfo };
 use serialport;
 use chrono;
 use rand::random;
 
 pub fn create_device(name: String) -> Device {
     Device {
-        name: name,
-        description: "This is a mock device that uses no hardware. It is used for testing and development purposes.".to_string(),
+        info: DeviceInfo {
+            name: name,
+            description: "This is a mock device that uses no hardware. It is used for testing and development purposes.".to_string(),
+        },
         channels: Vec::new(),
-        device_config: Box::new(MockConfig{
+        config: Box::new(MockConfig{
             port: serialport::SerialPortInfo {
                 port_name: "COMx".to_string(),
                 port_type: serialport::SerialPortType::Unknown
@@ -48,9 +50,9 @@ impl ChannelDataAquisition for RandomChannelConfig {
 }
 pub fn add_channel_random(device: &mut Device, name: String) -> Result<()>{
     let channel = Channel {
-        channel_info: ChannelInfo::new(name, "kW".to_string(), "Random number generator".to_string()),
-        channel_data: ChannelData::new(),
-        channel_config: Box::new(RandomChannelConfig{}),
+        info: ChannelInfo::new(name, "kW".to_string(), "Random number generator".to_string()),
+        data: ChannelData::new(),
+        config: Box::new(RandomChannelConfig{}),
     };
     device.add_channel(channel)?;
     Ok(())
@@ -70,9 +72,9 @@ impl ChannelDataAquisition for ConstantChannelConfig {
 }
 pub fn add_channel_constant(device: &mut Device, name: String) -> Result<()>{
     let channel = Channel {
-        channel_info: ChannelInfo::new(name, "degC".to_string(), "Constant number".to_string()),
-        channel_data: ChannelData::new(),
-        channel_config: Box::new(ConstantChannelConfig{port: "a0".to_string()}),
+        info: ChannelInfo::new(name, "degC".to_string(), "Constant number".to_string()),
+        data: ChannelData::new(),
+        config: Box::new(ConstantChannelConfig{port: "a0".to_string()}),
     };
     device.add_channel(channel)?;
     Ok(())

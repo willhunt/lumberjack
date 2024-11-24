@@ -29,7 +29,7 @@ impl Daq {
 
     pub fn add_device(&mut self, device: Device) -> Result<()> {
         for existing_device in self.devices.iter() {
-            if existing_device.name == device.name {
+            if existing_device.info.name == device.info.name {
                 return Err("Device name must be unique".into());
             }
         }
@@ -39,7 +39,7 @@ impl Daq {
     
     pub fn connect(&self) {
         for device in self.devices.iter() {
-            device.device_config.connect();
+            device.config.connect();
         }
     }
 

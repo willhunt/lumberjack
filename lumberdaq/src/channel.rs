@@ -52,36 +52,36 @@ impl ChannelData {
 
 // Could try parent Channel type that then holds data and config. The config would then have traits read. This might make it less inheritancy
 pub struct Channel {
-    pub channel_info: ChannelInfo,
-    pub channel_data: ChannelData,
-    pub channel_config: Box<dyn ChannelDataAquisition>,
+    pub info: ChannelInfo,
+    pub data: ChannelData,
+    pub config: Box<dyn ChannelDataAquisition>,
 }
 
 impl Channel {
     pub fn read(&mut self) -> Result<()> {
-        let mut datapoints = self.channel_config.read();
-        self.channel_data.add_datapoints(&mut datapoints)?;
+        let mut datapoints = self.config.read();
+        self.data.add_datapoints(&mut datapoints)?;
         Ok(())
     }
 
     pub fn latest_as_string(&self) -> String {
-        match self.channel_data.datapoint_last {
-            Some(data) => format!("{}: {}, {}{}", self.channel_info.name, data.datetime, data.value, self.channel_info.unit),
-            None => format!("{}: No data", self.channel_info.name)
+        match self.data.datapoint_last {
+            Some(data) => format!("{}: {}, {}{}", self.info.name, data.datetime, data.value, self.info.unit),
+            None => format!("{}: No data", self.info.name)
         }
     }
 
     pub fn write(&mut self, wtr: &mut csv::Writer<std::fs::File>, device_name: &str) -> Result<()> {
-        for datapoint in self.channel_data.datapoints.iter() {
+        for datapoint in self.data.datapoints.iter() {
             write_csv_record(
                 wtr,
                 device_name,
-                &self.channel_info.name,
+                &self.info.name,
                 datapoint.datetime,
                 datapoint.value
             )?;
         }
-        self.channel_data.datapoints = vec![];
+        self.data.datapoints = vec![];
         Ok(())
     }
 }

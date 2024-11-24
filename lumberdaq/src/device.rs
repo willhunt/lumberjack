@@ -14,26 +14,22 @@ pub trait DeviceDataAquisition {
     }
 }
 
-// #[allow(dead_code)]
-// pub enum DeviceType {
-//     Usb {
-//         baudrate: i32,
-//     },
-//     Mock,
-// }
-
-pub struct Device {
+pub struct DeviceInfo {
     pub name: String,
     pub description: String,
+}
+
+pub struct Device {
+    pub info: DeviceInfo,
     pub channels: Vec<Channel>,
     // pub device_type: DeviceType,
-    pub device_config: Box<dyn DeviceDataAquisition>,
+    pub config: Box<dyn DeviceDataAquisition>,
 }
 
 impl Device {
     pub fn add_channel(&mut self, channel: Channel) -> Result<()> {
         for existing_channel in self.channels.iter() {
-            if existing_channel.channel_info.name == channel.channel_info.name {
+            if existing_channel.info.name == channel.info.name {
                 return Err("Channel name must be unique".into());
             }
         }
@@ -42,7 +38,7 @@ impl Device {
     }
 
     pub fn print_latest(&self) {
-        println!("Latest reading from device: {}", &self.name);
+        println!("Latest reading from device: {}", &self.info.name);
         for channel in &self.channels {
             println!("    {}", channel.latest_as_string());
         }
@@ -50,7 +46,7 @@ impl Device {
 
     pub fn write(&mut self, wtr: &mut csv::Writer<std::fs::File>) -> Result<()>{
         for channel in &mut self.channels {
-            channel.write(wtr, &self.name)?;
+            channel.write(wtr, &self.info.name)?;
         }
         Ok(())
     }

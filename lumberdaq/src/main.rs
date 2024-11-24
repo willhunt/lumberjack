@@ -33,7 +33,7 @@ fn main() -> Result<()> {
     loop {
         // Read devices
         for dev in daq.devices.iter_mut() {
-            dev.device_config.read(&mut dev.channels);
+            dev.config.read(&mut dev.channels);
             dev.print_latest();
             match &mut daq.csv_writer {
                 Some(wtr) => dev.write(wtr)?,
