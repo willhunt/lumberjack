@@ -1,8 +1,26 @@
 {
+  "info": {
+    "name": "Example measurement",
+    "author": "Joesephine Bloggs"
+  },
   "devices": [
     {
-      "name": "Dummy device"
+      "info": {
+        "name": "Test device",
+        "description": "This is a mock device that uses no hardware. It is used for testing and development purposes."
+      },
+      "channels": [
+        {
+          "name": "Constant 1",
+          "unit": "degC",
+          "description": "Constant number"
+        },
+        {
+          "name": "Random 1",
+          "unit": "kW",
+          "description": "Random number generator"
+        }
+      ]
     }
-  ],
-  "name": "Example test"
+  ]
 }

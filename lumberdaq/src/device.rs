@@ -14,6 +14,7 @@ pub trait DeviceDataAquisition {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct DeviceInfo {
     pub name: String,
     pub description: String,

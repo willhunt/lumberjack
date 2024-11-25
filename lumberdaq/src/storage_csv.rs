@@ -1,10 +1,13 @@
-use crate::daq::Daq;
+use crate::channel::ChannelInfo;
+use crate::daq::{ Daq, DaqInfo };
+use crate::device::DeviceInfo;
 use crate::Result;
 use std::ffi::OsStr;
 use std::io::{Write, ErrorKind};
 use std::fs::File;
 use chrono::{ DateTime, Utc };
-use serde_json::{ json, to_string_pretty };
+use serde_json::to_string_pretty;
+use serde::{Deserialize, Serialize};
 
 /// The strategy for storing data as it is being recorded is to use a csv file
 /// Through testing this is much faster than saving a SQLite data base to disk
@@ -13,10 +16,17 @@ use serde_json::{ json, to_string_pretty };
 /// 
 /// To maintain a typical format for the csv file a json will be used to store
 /// any additional information about the test or setup.
-/// json format:
-/// {
-///     
-/// }
+
+#[derive(Serialize, Deserialize)]
+struct DeviceHeader {
+    info: DeviceInfo,
+    channels: Vec<ChannelInfo>,
+}
+#[derive(Serialize, Deserialize)]
+struct DaqHeader {
+    info: DaqInfo,
+    devices: Vec<DeviceHeader>,
+}
 
 pub fn check_file_extension(path: &std::path::PathBuf, extension: &OsStr) -> Result<()> {
     if path.extension() != Some(extension) {
@@ -31,15 +41,20 @@ pub fn check_file_extension(path: &std::path::PathBuf, extension: &OsStr) -> Res
 
 pub fn create_json_file(path: &std::path::PathBuf, daq: &Daq) -> Result<()> {
     check_file_extension(path, OsStr::new("json"))?;
-    let test_headers = json!({
-        "name": "Example test",
-        "devices": [
-            {"name": "Dummy device"}
-        ]
-    });
+    let header = DaqHeader{
+        info: daq.info.clone(),
+        devices: daq.devices.iter().map(|device|
+            DeviceHeader {
+                info: device.info.clone(),
+                channels: device.channels.iter().map(|channel| channel.info.clone()).collect(),
+            }
+        ).collect(),
+    };
+    // serde_json::to_writer(writer, value);
+
     let mut file = File::create(path)?;
-    // file.write_all(test_headers.to_string().as_bytes())?;
-    file.write_all(to_string_pretty(&test_headers)?.as_bytes())?;
+    // file.write_all(header_json.to_string().as_bytes())?;
+    file.write_all(to_string_pretty(&header)?.as_bytes())?;
     return Ok(());
 }
 

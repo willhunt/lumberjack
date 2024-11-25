@@ -21,6 +21,8 @@ fn main() -> Result<()> {
 
     
     let mut daq = daq::Daq::new(
+        "Example measurement".to_string(),
+        "Joesephine Bloggs".to_string(),
         vec![mock_device],
         storage_path,
     )?;

@@ -1,11 +1,16 @@
 use crate::Result;
 use crate::device::Device;
 use crate::storage_csv::{create_csv_file, create_json_file};
-// use std::error::Error;
-// use crate::storage_hdf::{ create_hdf_file, add_hdf_device, add_hdf_channel };
-// use hdf5;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct DaqInfo {
+    name: String,
+    author: String,
+}
 
 pub struct Daq {
+    pub info: DaqInfo,
     pub devices: Vec<Device>,
     json_path: std::path::PathBuf,
     csv_path: std::path::PathBuf,
@@ -13,8 +18,12 @@ pub struct Daq {
     // hdf_path: std::path::PathBuf,
 }
 impl Daq {
-    pub fn new(devices: Vec<Device>, storage_path: std::path::PathBuf) -> Result<Daq> {
+    pub fn new(name: String, author: String, devices: Vec<Device>, storage_path: std::path::PathBuf) -> Result<Daq> {
         let mut daq = Daq {
+            info: DaqInfo {
+                name: name,
+                author: author,
+            },
             devices: vec![],
             json_path: storage_path.clone().with_extension("json"),
             csv_path: storage_path,

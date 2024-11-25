@@ -13,7 +13,7 @@ pub trait ChannelDataAquisition {
     fn read(&self) -> Vec<DataPoint>;
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ChannelInfo {
     pub name: String,
     pub unit: String,
