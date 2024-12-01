@@ -13,7 +13,7 @@ pub struct Daq {
     pub info: DaqInfo,
     pub devices: Vec<Device>,
     json_path: std::path::PathBuf,
-    csv_path: std::path::PathBuf,
+    pub csv_path: std::path::PathBuf,
     pub csv_writer: Option<csv::Writer<std::fs::File>>,
     // hdf_path: std::path::PathBuf,
 }

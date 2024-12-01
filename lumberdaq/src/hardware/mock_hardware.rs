@@ -41,11 +41,11 @@ impl DeviceDataAquisition for MockConfig {
 pub struct RandomChannelConfig {
 }
 impl ChannelDataAquisition for RandomChannelConfig {
-    fn read(&self) -> Vec<DataPoint> {
-        vec![DataPoint {
+    fn read(&mut self) -> Result<Vec<DataPoint>> {
+        Ok(vec![DataPoint {
             datetime: chrono::Utc::now(),
             value: random(),
-        }]
+        }])
     }
 }
 pub fn add_channel_random(device: &mut Device, name: String) -> Result<()>{
@@ -63,11 +63,11 @@ pub struct ConstantChannelConfig {
     port: String,
 }
 impl ChannelDataAquisition for ConstantChannelConfig {
-    fn read(&self) -> Vec<DataPoint> {
-        vec![DataPoint {
+    fn read(&mut self) -> Result<Vec<DataPoint>> {
+        Ok(vec![DataPoint {
             datetime: chrono::Utc::now(),
             value: 10.0,
-        }]
+        }])
     }
 }
 pub fn add_channel_constant(device: &mut Device, name: String) -> Result<()>{

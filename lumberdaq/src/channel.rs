@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 // }
 
 pub trait ChannelDataAquisition {
-    fn read(&self) -> Vec<DataPoint>;
+    fn read(&mut self) -> Result<Vec<DataPoint>>;
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -59,7 +59,7 @@ pub struct Channel {
 
 impl Channel {
     pub fn read(&mut self) -> Result<()> {
-        let mut datapoints = self.config.read();
+        let mut datapoints = self.config.read()?;
         self.data.add_datapoints(&mut datapoints)?;
         Ok(())
     }

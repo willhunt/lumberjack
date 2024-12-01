@@ -11,5 +11,5 @@ rand = "0.8.5"
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
 serialport = "4.5.0"
-ni-daqmx-sys = "20.7.1"
-daqmx = { git = "https://github.com/WiresmithTech/daqmx-rs.git" }
+daqmx = {path = "../daqmx-rs", version = "0.0.1"}
+ndarray = "0.16.1"

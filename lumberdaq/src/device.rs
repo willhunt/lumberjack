@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub trait DeviceDataAquisition {
     fn connect(&self);
-    fn read(&self, channels: &mut Vec<Channel>) {
+    fn read(&mut self, channels: &mut Vec<Channel>) {
         for channel in channels.iter_mut() {
             match channel.read() {
                 Err(e) => println!("{e}"),

@@ -1,9 +1,10 @@
-use crate::channel::ChannelInfo;
+use crate::channel::{ChannelData, ChannelInfo};
 use crate::daq::{ Daq, DaqInfo };
-use crate::device::DeviceInfo;
+use crate::device::{self, DeviceInfo};
 use crate::Result;
+use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::io::{Write, ErrorKind};
+use std::io::{ErrorKind, Read, Write};
 use std::fs::File;
 use chrono::{ DateTime, Utc };
 use serde_json::to_string_pretty;
@@ -18,14 +19,21 @@ use serde::{Deserialize, Serialize};
 /// any additional information about the test or setup.
 
 #[derive(Serialize, Deserialize)]
-struct DeviceHeader {
-    info: DeviceInfo,
-    channels: Vec<ChannelInfo>,
+pub struct DeviceHeader {
+    pub info: DeviceInfo,
+    pub channels: Vec<ChannelInfo>,
 }
 #[derive(Serialize, Deserialize)]
-struct DaqHeader {
-    info: DaqInfo,
-    devices: Vec<DeviceHeader>,
+pub struct DaqHeader {
+    pub info: DaqInfo,
+    pub devices: Vec<DeviceHeader>,
+}
+
+pub struct ChannelReadData {
+    // pub device_name: String,
+    // pub channel_name: String,
+    pub timestamps: Vec<i64>,
+    pub values: Vec<f64>,
 }
 
 pub fn check_file_extension(path: &std::path::PathBuf, extension: &OsStr) -> Result<()> {
@@ -58,6 +66,15 @@ pub fn create_json_file(path: &std::path::PathBuf, daq: &Daq) -> Result<()> {
     return Ok(());
 }
 
+pub fn read_json_file(path: &std::path::PathBuf) -> Result<DaqHeader> {
+    let mut file = File::open(path)?;
+    let mut data = String::new();
+    file.read_to_string(&mut data)?;
+
+    let header: DaqHeader = serde_json::from_str(&data)?;
+    return Ok(header);
+}
+
 pub fn create_csv_file(path: &std::path::PathBuf) -> Result<csv::Writer<std::fs::File>> {
     check_file_extension(path, OsStr::new("csv"))?;
     let mut wtr = csv::Writer::from_path(path)?;
@@ -69,6 +86,33 @@ pub fn write_csv_record(wtr: &mut csv::Writer<std::fs::File>, device_name: &str,
     wtr.write_record(&[device_name, channel_name, &timestamp.to_string(), &value.to_string()])?;
     wtr.flush()?;
     return Ok(());
+}
+
+pub fn read_csv_file(path: &std::path::PathBuf) -> Result<HashMap<String, HashMap<String, i64>>> {
+    // let read_data: Vec<ChannelReadData> = vec![];
+    let mut device_map = HashMap::new();
+
+    // let file = File::open(path)?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)?;
+    for result in rdr.records() {
+        let record = result?;
+        if record.len() == 4 {
+            let device_name = record[0].to_string();
+            let channel_name = record[1].to_string();
+            let timestamp: DateTime<Utc> = record[2].parse()?;
+            let value: f64 = record[3].parse()?;
+
+            let channel_map = device_map.entry(device_name).or_insert(HashMap::new());
+            let results_map = channel_map.entry(channel_name).or_insert(0);
+
+        }
+        else {
+            return Err("csv record not of length 4".into());
+        }
+    }
+    Ok(device_map)
 }
 
 #[cfg(test)]

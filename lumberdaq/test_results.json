@@ -21,6 +21,19 @@
           "description": "Random number generator"
         }
       ]
+    },
+    {
+      "info": {
+        "name": "Virtual USB-6001",
+        "description": "National instruments USB-6001 data aquisition device."
+      },
+      "channels": [
+        {
+          "name": "Virtual sine wave",
+          "unit": "V",
+          "description": "Analog input channel"
+        }
+      ]
     }
   ]
 }
