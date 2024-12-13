@@ -2,10 +2,13 @@ use crate::{daq, Result};
 use crate::datapoint::DataPoint;
 use crate::channel::{ Channel, ChannelData, ChannelDataAquisition, ChannelInfo };
 use crate::device::{ Device, DeviceDataAquisition, DeviceInfo };
-use serialport;
+// use serialport;
 use chrono;
+#[allow(dead_code)]
 use daqmx::tasks::{AnalogInput, InputTask, Task};
+#[allow(dead_code)]
 use daqmx::channels::VoltageChannelBuilder;
+#[allow(dead_code)]
 use daqmx::types::Timeout;
 
 pub fn create_device(name: String, port: String) -> Device {
@@ -16,12 +19,12 @@ pub fn create_device(name: String, port: String) -> Device {
         },
         channels: Vec::new(),
         config: Box::new(NiUsb6001Config {
-            port: port,
+            // port: port,
         }),
     }
 }
 pub struct NiUsb6001Config {
-    pub port: String,
+    // pub port: String,
 }
 impl DeviceDataAquisition for NiUsb6001Config {
     fn connect(&self) {
@@ -38,12 +41,12 @@ impl DeviceDataAquisition for NiUsb6001Config {
 }
 
 pub struct AnalogChannelConfig {
-    port: String,
+    // port: String,
     task: Task<AnalogInput>,
 }
 impl ChannelDataAquisition for AnalogChannelConfig {
     fn read(&mut self) -> Result<Vec<DataPoint>> {
-        self.task.read(timeout, fill_mode, samples_per_channel, buffer)
+        // self.task.read(timeout, fill_mode, samples_per_channel, buffer);
         Ok(vec![DataPoint {
             datetime: chrono::Utc::now(),
             value: self.task.read_scalar(Timeout::Seconds(1.0))?,
@@ -52,7 +55,7 @@ impl ChannelDataAquisition for AnalogChannelConfig {
 }
 pub fn add_channel_analog(device: &mut Device, name: String, port: String) -> Result<()> {
     let mut task = Task::new("scalar")?;
-    let voltage_channel = VoltageChannelBuilder::new("NIUSB-6001/ai0")?;
+    let voltage_channel = VoltageChannelBuilder::new(port.to_string())?;
     task.create_channel(voltage_channel)?;
     task.read_scalar(Timeout::Seconds(1.0))?;
 
@@ -60,7 +63,7 @@ pub fn add_channel_analog(device: &mut Device, name: String, port: String) -> Re
         info: ChannelInfo::new(name, "V".to_string(), "Analog input channel".to_string()),
         data: ChannelData::new(),
         config: Box::new(AnalogChannelConfig {
-            port: port,
+            // port: port,
             task: task,
         }),
     };

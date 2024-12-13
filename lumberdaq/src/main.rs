@@ -7,6 +7,7 @@ mod daq;
 mod storage_hdf;
 mod storage_csv;
 
+
 pub use self::error::{Error, Result};
 use hardware::mock_hardware;
 use hardware::ni_usb6001;
@@ -23,13 +24,14 @@ fn main() -> Result<()> {
     mock_hardware::add_channel_random(&mut mock_device, "Random 1".to_string())?;
 
     // National instruments
-    let serial_port = serialport::SerialPortInfo {
-        port_name: "COMx".to_string(),
-        port_type: serialport::SerialPortType::Unknown
-    };
-    let mut usb6001_device = ni_usb6001::create_device("Virtual USB-6001".to_string(), serial_port);
-    ni_usb6001::add_channel_analog(&mut usb6001_device, "Virtual sine wave".to_string(), "ai0".to_string())?;
+    let mut usb6001_device = ni_usb6001::create_device("Virtual USB-6001".to_string(), "NIUSB-6001".to_string());
+    ni_usb6001::add_channel_analog(&mut usb6001_device, "Virtual sine wave".to_string(), "NIUSB-6001/ai0".to_string())?;
 
+    // Serial device
+     // let serial_port = serialport::SerialPortInfo {
+    //     port_name: "COMx".to_string(),
+    //     port_type: serialport::SerialPortType::Unknown
+    // };
     
     let mut daq = daq::Daq::new(
         "Example measurement".to_string(),
