@@ -6,17 +6,22 @@ mod device;
 mod daq;
 mod storage_hdf;
 mod storage_csv;
-
+mod configuration;
 
 pub use self::error::{Error, Result};
 use hardware::mock_hardware;
 use hardware::ni_usb6001;
 use storage_hdf::convert_results_to_hdf5;
 use std::{thread, time};
+use configuration::read_configuration_file;
 
 
 fn main() -> Result<()> {
     let storage_path = std::path::PathBuf::from("test_results.csv");
+    let config_path = std::path::PathBuf::from("examples/simulated_devices/config.json");
+    // Load config
+    read_configuration_file("examples/simulated_devices/config.json")?;
+
     println!("Lets create some devices");
     // Mock device
     let mut mock_device = mock_hardware::create_device("Test device".to_string());
@@ -24,8 +29,9 @@ fn main() -> Result<()> {
     mock_hardware::add_channel_random(&mut mock_device, "Random 1".to_string())?;
 
     // National instruments
-    let mut usb6001_device = ni_usb6001::create_device("Virtual USB-6001".to_string(), "NIUSB-6001".to_string());
-    ni_usb6001::add_channel_analog(&mut usb6001_device, "Virtual sine wave".to_string(), "NIUSB-6001/ai0".to_string())?;
+    let mut usb6001_device = ni_usb6001::create_device("Virtual USB-6001".to_string(), "NIUSB-6001".to_string())?;
+    ni_usb6001::add_channel_analog(&mut usb6001_device, "Virtual signal 0".to_string(), "NIUSB-6001/ai0".to_string())?;
+    ni_usb6001::add_channel_analog(&mut usb6001_device, "Virtual signal 1".to_string(), "NIUSB-6001/ai1".to_string())?;
 
     // Serial device
      // let serial_port = serialport::SerialPortInfo {

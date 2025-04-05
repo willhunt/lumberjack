@@ -1,0 +1,72 @@
+{
+    "devices": [
+        {
+            "type": "mock_hardware",
+            "info": {
+                "name": "Mock device",
+                "description": "Test mock device tht can generate constant and random numbers."
+            },
+            "config": {
+
+            },
+            "channels": [
+                        {
+                    "type": "constant",
+                    "info": {
+                        "name": "Constant",
+                        "description": "Constant number",
+                        "unit": "-"
+                    },
+                    "config": {
+                        
+                    }
+                },
+                {
+                    "type": "random",
+                    "info": {
+                        "name": "Random",
+                        "description": "Random number",
+                        "unit": "-"
+                    },
+                    "config": {
+                        
+                    }
+                }
+            ]
+        },
+        {
+            "type": "ni_usb6001",
+            "info": {
+                "name": "Virtual NI USB 6001",
+                "description": "Test mock device tht can generate constant and random numbers."
+            },
+            "config": {
+
+            },
+            "channels": [
+                {
+                    "type": "analog",
+                    "info": {
+                        "name": "Voltage 0",
+                        "description": "Voltage at input ai0",
+                        "unit": "V"
+                    },
+                    "config": {
+                        "port": "NIUSB-6001/ai0"
+                    }
+                },
+                {
+                    "type": "analog",
+                    "info": {
+                        "name": "Voltage 1",
+                        "description": "Voltage at input ai1",
+                        "unit": "V"
+                    },
+                    "config": {
+                        "port": "NIUSB-6001/ai1"
+                    }
+                }
+            ]
+        }
+    ]
+}

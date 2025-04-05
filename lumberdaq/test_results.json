@@ -29,7 +29,12 @@
       },
       "channels": [
         {
-          "name": "Virtual sine wave",
+          "name": "Virtual signal 0",
+          "unit": "V",
+          "description": "Analog input channel"
+        },
+        {
+          "name": "Virtual signal 1",
           "unit": "V",
           "description": "Analog input channel"
         }

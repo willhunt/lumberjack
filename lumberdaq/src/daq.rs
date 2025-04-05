@@ -46,8 +46,8 @@ impl Daq {
         Ok(())
     }
     
-    pub fn connect(&self) {
-        for device in self.devices.iter() {
+    pub fn connect(&mut self) {
+        for device in self.devices.iter_mut() {
             device.config.connect();
         }
     }

@@ -2,9 +2,11 @@ use crate::Result;
 use crate::datapoint::DataPoint;
 use crate::channel::{ Channel, ChannelData, ChannelDataAquisition, ChannelInfo };
 use crate::device::{ Device, DeviceDataAquisition, DeviceInfo };
-use serialport;
+use serde::{Deserialize, Serialize};
+// use serialport;
 use chrono;
 use rand::random;
+use std::any::Any;
 
 pub fn create_device(name: String) -> Device {
     Device {
@@ -14,28 +16,28 @@ pub fn create_device(name: String) -> Device {
         },
         channels: Vec::new(),
         config: Box::new(MockConfig{
-            port: serialport::SerialPortInfo {
-                port_name: "COMx".to_string(),
-                port_type: serialport::SerialPortType::Unknown
-            },
+            // port: serialport::SerialPortInfo {
+            //     port_name: "COMx".to_string(),
+            //     port_type: serialport::SerialPortType::Unknown
+            // },
         }),
     }
 }
+
+#[derive(Serialize, Deserialize)]
 pub struct MockConfig {
-    pub port: serialport::SerialPortInfo,
+
 }
 impl DeviceDataAquisition for MockConfig {
-    fn connect(&self) {
+    fn connect(&mut self) {
         println!("Connected to mock device.");
     }
-    // fn read(&mut self) {
-    //     for channel in &mut self.device.channels {
-    //         match channel.read() {
-    //             Err(e) => println!("{e}"),
-    //             Ok(()) => (),
-    //         }
-    //     }
-    // }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 pub struct RandomChannelConfig {
@@ -48,7 +50,7 @@ impl ChannelDataAquisition for RandomChannelConfig {
         }])
     }
 }
-pub fn add_channel_random(device: &mut Device, name: String) -> Result<()>{
+pub fn add_channel_random(device: &mut Device, name: String) -> Result<()> {
     let channel = Channel {
         info: ChannelInfo::new(name, "kW".to_string(), "Random number generator".to_string()),
         data: ChannelData::new(),
@@ -78,4 +80,9 @@ pub fn add_channel_constant(device: &mut Device, name: String) -> Result<()>{
     };
     device.add_channel(channel)?;
     Ok(())
+}
+
+
+pub struct MockHardwareDevice {
+    
 }

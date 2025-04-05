@@ -1,17 +1,18 @@
 use crate::Result;
 use crate::channel::Channel;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
 
 pub trait DeviceDataAquisition {
-    fn connect(&self);
-    fn read(&mut self, channels: &mut Vec<Channel>) {
+    fn connect(&mut self);
+    fn read(&mut self, channels: &mut Vec<Channel>) -> Result<()> {
         for channel in channels.iter_mut() {
-            match channel.read() {
-                Err(e) => println!("{e}"),
-                Ok(()) => (),
-            }
+            channel.read()?;
         }
+        Ok(())
     }
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 #[derive(Serialize, Deserialize, Clone)]

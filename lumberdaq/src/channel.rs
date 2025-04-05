@@ -66,7 +66,7 @@ impl Channel {
 
     pub fn latest_as_string(&self) -> String {
         match self.data.datapoint_last {
-            Some(data) => format!("{}: {}, {}{}", self.info.name, data.datetime, data.value, self.info.unit),
+            Some(data) => format!("{}: {}, {} {}", self.info.name, data.datetime, data.value, self.info.unit),
             None => format!("{}: No data", self.info.name)
         }
     }
