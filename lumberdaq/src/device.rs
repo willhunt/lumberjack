@@ -1,18 +1,11 @@
 use crate::Result;
 use crate::channel::Channel;
+use crate::hardware::{ Hardware, HardwareDataAquisition };
 use serde::{Deserialize, Serialize};
-use std::any::Any;
 
-pub trait DeviceDataAquisition {
+pub trait DeviceInterface {
     fn connect(&mut self);
-    fn read(&mut self, channels: &mut Vec<Channel>) -> Result<()> {
-        for channel in channels.iter_mut() {
-            channel.read()?;
-        }
-        Ok(())
-    }
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+    // fn read(&mut self) -> Result<()>;
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -21,14 +14,25 @@ pub struct DeviceInfo {
     pub description: String,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Device {
     pub info: DeviceInfo,
     pub channels: Vec<Channel>,
-    // pub device_type: DeviceType,
-    pub config: Box<dyn DeviceDataAquisition>,
+    pub hardware: Hardware,
 }
 
 impl Device {
+    pub fn new(name: String, description: String, hardware: Hardware) -> Device {
+        Device {
+            info: DeviceInfo {
+                name: name,
+                description: description,
+            },            
+            channels: vec![],
+            hardware: hardware,
+        }
+    }
+
     pub fn add_channel(&mut self, channel: Channel) -> Result<()> {
         for existing_channel in self.channels.iter() {
             if existing_channel.info.name == channel.info.name {
@@ -41,9 +45,17 @@ impl Device {
 
     pub fn print_latest(&self) {
         println!("Latest reading from device: {}", &self.info.name);
-        for channel in &self.channels {
+        for channel in self.channels.iter() {
             println!("    {}", channel.latest_as_string());
         }
+    }
+
+    pub fn read(&mut self) -> Result<()> {
+        let mut input_readings = self.hardware.read()?;
+        for (channel, datapoints) in self.channels.iter_mut().zip(input_readings.iter_mut()) {
+            channel.add_datapoints(datapoints);
+        }
+        Ok(())
     }
 
     pub fn write(&mut self, wtr: &mut csv::Writer<std::fs::File>) -> Result<()>{
@@ -55,13 +67,10 @@ impl Device {
     
     // pub fn add_to_hdf(&self, file: )
 
-    // Moved this to trait default. Leaving for now, if other strategy works, delete.
-    // pub fn read(&mut self) {
-    //     for channel in &mut self.channels {
-    //         match channel.read() {
-    //             Err(e) => println!("{e}"),
-    //             Ok(()) => (),
-    //         }
-    //     }
-    // }
+}
+
+impl DeviceInterface for Device {
+    fn connect(&mut self) {
+        self.hardware.connect();
+    }
 }

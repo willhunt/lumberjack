@@ -7,17 +7,13 @@
     {
       "info": {
         "name": "Test device",
-        "description": "This is a mock device that uses no hardware. It is used for testing and development purposes."
+        "description": "-"
       },
       "channels": [
         {
-          "name": "Constant 1",
-          "unit": "degC",
-          "description": "Constant number"
-        },
-        {
+          "id": "c0",
           "name": "Random 1",
-          "unit": "kW",
+          "unit": "-",
           "description": "Random number generator"
         }
       ]
@@ -25,15 +21,17 @@
     {
       "info": {
         "name": "Virtual USB-6001",
-        "description": "National instruments USB-6001 data aquisition device."
+        "description": "NIUSB-6001"
       },
       "channels": [
         {
+          "id": "NIUSB-6001/ai0",
           "name": "Virtual signal 0",
           "unit": "V",
           "description": "Analog input channel"
         },
         {
+          "id": "NIUSB-6001/ai1",
           "name": "Virtual signal 1",
           "unit": "V",
           "description": "Analog input channel"

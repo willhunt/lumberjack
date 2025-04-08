@@ -1,14 +1,14 @@
-use crate::channel::{ChannelData, ChannelInfo};
+use crate::channel::ChannelInfo;
 use crate::daq::{ Daq, DaqInfo };
-use crate::device::{self, DeviceInfo};
+use crate::device::DeviceInfo;
 use crate::Result;
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ ErrorKind, Read, Write };
 use std::fs::File;
 use chrono::{ DateTime, Utc };
 use serde_json::to_string_pretty;
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 
 /// The strategy for storing data as it is being recorded is to use a csv file
 /// Through testing this is much faster than saving a SQLite data base to disk

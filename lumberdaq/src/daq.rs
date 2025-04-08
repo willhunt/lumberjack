@@ -1,19 +1,22 @@
 use crate::Result;
-use crate::device::Device;
+use crate::hardware::Hardware;
+use crate::device::{ Device, DeviceInterface };
 use crate::storage_csv::{create_csv_file, create_json_file};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)] // csv_writer connot be cloned
 pub struct DaqInfo {
-    name: String,
-    author: String,
+    pub name: String,
+    pub author: String,
 }
 
+#[derive(Serialize, Deserialize)] // csv_writer connot be cloned
 pub struct Daq {
     pub info: DaqInfo,
     pub devices: Vec<Device>,
     json_path: std::path::PathBuf,
     pub csv_path: std::path::PathBuf,
+    #[serde(skip)]
     pub csv_writer: Option<csv::Writer<std::fs::File>>,
     // hdf_path: std::path::PathBuf,
 }
@@ -22,7 +25,7 @@ impl Daq {
         let mut daq = Daq {
             info: DaqInfo {
                 name: name,
-                author: author,
+                author: author,     
             },
             devices: vec![],
             json_path: storage_path.clone().with_extension("json"),
@@ -48,7 +51,7 @@ impl Daq {
     
     pub fn connect(&mut self) {
         for device in self.devices.iter_mut() {
-            device.config.connect();
+            device.connect();
         }
     }
 
