@@ -2,7 +2,6 @@
 pub mod mock_hardware;
 pub mod ni_usb6001;
 use crate::datapoint::DataPoint;
-use crate::channel::ChannelDataAquisition;
 // pub mod firmata;
 use crate::Result;
 use crate::mock_hardware::{ MockHardware, MockHardwareInput };

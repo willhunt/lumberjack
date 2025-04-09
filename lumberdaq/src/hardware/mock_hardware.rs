@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::datapoint::DataPoint;
 use crate::channel::{ Channel, ChannelDataAquisition };
-use crate::device::{ Device, DeviceInfo, DeviceInterface };
+use crate::device::{ Device, DeviceInterface };
 use crate::hardware::{HardwareDataAquisition, Hardware };
 use serde::{Deserialize, Serialize};
 use chrono;

@@ -1,7 +1,8 @@
-use crate::{device, Result};
+use crate::Result;
 use crate::storage_csv::{ read_csv_file, read_json_file };
 use std::str::FromStr;
 use hdf5;
+use ndarray::{ Array, Array2, ArrayView1, Axis };
 // use::ndarray::{Array1, ArrayView};
 
 // let hdf_file = create_hdf_file(&self.hdf_path)?;
@@ -42,19 +43,49 @@ pub fn add_hdf_device(file: &hdf5::File, name: &str) -> Result<hdf5::Group> {
 
 /// Setup and add new channel to HDF5 file
 /// Found useful information at this [repo](https://github.com/pywr/pywr-next/blob/030a7e9e5642e0da7b5d39db262e0ee032ca39ed/pywr-core/src/recorders/hdf.rs#L180)
-pub fn add_hdf_channel(device_group: &hdf5::Group, name: &str, units: &str, description: &str, timestamps: Vec<i64>, values: Vec<f64>) -> Result<hdf5::Group> {
-    let group = device_group.create_group(name)?;
-    add_hdf_str_attribute(&group, "description", description)?;
+pub fn add_hdf_channel(device_group: &hdf5::Group, name: &str, units: &str, description: &str, timestamps: Vec<f64>, values: Vec<f64>) -> Result<hdf5::Dataset> {
+    if timestamps.len() != values.len() {
+        return Err("Timestamps and values must have the same length".into());
+    }
+
+    // let group = device_group.create_group(name)?;
+    // add_hdf_str_attribute(&group, "description", description)?;
+
+    // Create a compound dataset with both timestamps and values
+    // let data: Array2<f64> = Array::from_shape_vec(shape, v)
+    let timestamps_view = ArrayView1::from(&timestamps);
+    let values_view = ArrayView1::from(&values);
+    let combined_data: Array2<f64> = ndarray::stack(Axis(0), &[timestamps_view, values_view])?;
+
+    let ds_data = device_group
+        .new_dataset::<f64>()
+        .shape(combined_data.shape())
+        .create(name)?;
+    
+    // Combine timestamps and values into pairs
+    // let mut combined_data: Vec<(f64, f64)> = Vec::with_capacity(timestamps.len());
+    // for (t, v) in timestamps.iter().zip(values.iter()) {
+    //     combined_data.push((*t as f64, *v));
+    // }
+    
+    // Write the combined data
+    ds_data.write(&combined_data)?;
+    
+    // Add attributes
+    add_hdf_str_attribute(&ds_data, "description", description)?;
+    add_hdf_str_attribute(&ds_data, "timestamp units", "UNIX timestamp")?;
+    add_hdf_str_attribute(&ds_data, "value units", units)?;
+
     // Add datasets
     // let array_timestamps = Array1::from_vec(timestamps).view();
-    let ds_timestamps = group.new_dataset::<i64>().shape(timestamps.len()).create("timestamps")?;
-    add_hdf_str_attribute(&ds_timestamps, "units", "UNIX timestamp")?;
-    ds_timestamps.write(&timestamps)?;
+    // let ds_timestamps = group.new_dataset::<i64>().shape(timestamps.len()).create("timestamps")?;
+    // add_hdf_str_attribute(&ds_timestamps, "units", "UNIX timestamp")?;
+    // ds_timestamps.write(&timestamps)?;
     
-    let ds_values = group.new_dataset::<f64>().shape(values.len()).create("values")?;
-    add_hdf_str_attribute(&ds_values, "units", units)?;
-    ds_values.write(&values)?;
-    return  Ok(group);
+    // let ds_values = group.new_dataset::<f64>().shape(values.len()).create("values")?;
+    // add_hdf_str_attribute(&ds_values, "units", units)?;
+    // ds_values.write(&values)?;
+    return  Ok(ds_data);
 }
 
 /// Write HDF5 chunk to file
@@ -74,7 +105,7 @@ pub fn convert_results_to_hdf5(path: &std::path::PathBuf) -> Result<()> {
     let header = read_json_file(&path.clone().with_extension("json"))?;
     let records_map = read_csv_file(path)?;
     for (key1, value1) in records_map {
-        for (key2, value2) in value1 {
+        for (key2, _) in value1 {
             println!("Key: {}, Value: {}", key1, key2);
         }
     }
@@ -82,7 +113,7 @@ pub fn convert_results_to_hdf5(path: &std::path::PathBuf) -> Result<()> {
     for device in header.devices.iter() {
         let group = add_hdf_device(&file, &device.info.name)?;
         for channel in device.channels.iter() {
-            add_hdf_channel(&group, &channel.name, &channel.unit, &channel.description, vec![0,1,2], vec![0.,2.,1.])?;
+            add_hdf_channel(&group, &channel.name, &channel.unit, &channel.description, vec![0.,1.,2.], vec![0.,2.,1.])?;
         }
     }
 

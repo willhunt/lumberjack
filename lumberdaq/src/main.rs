@@ -9,7 +9,7 @@ mod storage_csv;
 mod configuration;
 
 pub use self::error::{Error, Result};
-use hardware::{ mock_hardware, ni_usb6001, Hardware };
+use hardware::{ mock_hardware, ni_usb6001 };
 use storage_hdf::convert_results_to_hdf5;
 use std::{thread, time};
 // use configuration::read_configuration_file;

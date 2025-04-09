@@ -53,7 +53,7 @@ impl Device {
     pub fn read(&mut self) -> Result<()> {
         let mut input_readings = self.hardware.read()?;
         for (channel, datapoints) in self.channels.iter_mut().zip(input_readings.iter_mut()) {
-            channel.add_datapoints(datapoints);
+            channel.add_datapoints(datapoints)?;
         }
         Ok(())
     }
