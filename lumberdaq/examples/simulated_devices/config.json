@@ -1,0 +1,88 @@
+{
+  "info": {
+    "name": "Example measurement",
+    "author": "Joesephine Bloggs"
+  },
+  "devices": [
+    {
+      "info": {
+        "name": "Test device",
+        "description": "-"
+      },
+      "channels": [
+        {
+          "info": {
+            "id": "c0",
+            "name": "Random 1",
+            "unit": "-",
+            "description": "Random number generator"
+          },
+          "datapoints": [],
+          "datapoint_last": {
+            "datetime": "2025-04-13T16:00:43.112551400Z",
+            "value": 0.7043892713671829
+          }
+        }
+      ],
+      "hardware": {
+        "type": "MockHardware",
+        "description": "This is a mock device that uses no hardware. It is used for testing and development purposes.",
+        "inputs": [
+          "Random"
+        ]
+      }
+    },
+    {
+      "info": {
+        "name": "Virtual USB-6001",
+        "description": "NIUSB-6001"
+      },
+      "channels": [
+        {
+          "info": {
+            "id": "NIUSB-6001/ai0",
+            "name": "Virtual signal 0",
+            "unit": "V",
+            "description": "Analog input channel"
+          },
+          "datapoints": [],
+          "datapoint_last": {
+            "datetime": "2025-04-13T16:00:43.112909700Z",
+            "value": 0.2209742400195336
+          }
+        },
+        {
+          "info": {
+            "id": "NIUSB-6001/ai1",
+            "name": "Virtual signal 1",
+            "unit": "V",
+            "description": "Analog input channel"
+          },
+          "datapoints": [],
+          "datapoint_last": {
+            "datetime": "2025-04-13T16:00:43.112909700Z",
+            "value": 0.6446099377365401
+          }
+        }
+      ],
+      "hardware": {
+        "type": "NiUsb6001",
+        "decription": "National instruments USB-6001 data aquisition device.",
+        "inputs": [
+          {
+            "Analog": {
+              "port": "NIUSB-6001/ai0"
+            }
+          },
+          {
+            "Analog": {
+              "port": "NIUSB-6001/ai1"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "json_path": "src/examples/simulated_devices/test_results.json",
+  "csv_path": "src/examples/simulated_devices/test_results.csv"
+}

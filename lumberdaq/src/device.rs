@@ -4,7 +4,7 @@ use crate::hardware::{ Hardware, HardwareDataAquisition };
 use serde::{Deserialize, Serialize};
 
 pub trait DeviceInterface {
-    fn connect(&mut self);
+    fn connect(&mut self) -> Result<()>;
     // fn read(&mut self) -> Result<()>;
 }
 
@@ -70,7 +70,8 @@ impl Device {
 }
 
 impl DeviceInterface for Device {
-    fn connect(&mut self) {
+    fn connect(&mut self) -> Result<()> {
         self.hardware.connect();
+        Ok(())
     }
 }

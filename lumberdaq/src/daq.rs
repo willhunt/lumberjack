@@ -1,8 +1,7 @@
 use crate::Result;
-use crate::hardware::Hardware;
 use crate::device::{ Device, DeviceInterface };
-use crate::storage_csv::{create_csv_file, create_json_file};
-use serde::{Deserialize, Serialize};
+use crate::storage_csv::{ write_csv_file, write_json_file };
+use serde::{ Deserialize, Serialize };
 
 #[derive(Serialize, Deserialize, Clone)] // csv_writer connot be cloned
 pub struct DaqInfo {
@@ -14,7 +13,7 @@ pub struct DaqInfo {
 pub struct Daq {
     pub info: DaqInfo,
     pub devices: Vec<Device>,
-    json_path: std::path::PathBuf,
+    pub json_path: std::path::PathBuf,
     pub csv_path: std::path::PathBuf,
     #[serde(skip)]
     pub csv_writer: Option<csv::Writer<std::fs::File>>,
@@ -49,15 +48,16 @@ impl Daq {
         Ok(())
     }
     
-    pub fn connect(&mut self) {
+    pub fn connect(&mut self) -> Result<()> {
         for device in self.devices.iter_mut() {
-            device.connect();
+            device.connect()?;
         }
+        Ok(())
     }
 
     pub fn init_storage(&mut self) -> Result<()> {
-        create_json_file(&self.json_path, self)?;
-        self.csv_writer = Some(create_csv_file(&self.csv_path)?);
+        write_json_file(&self.json_path, self)?;
+        self.csv_writer = Some(write_csv_file(&self.csv_path)?);
         
         return Ok(());
     }

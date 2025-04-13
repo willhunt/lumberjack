@@ -1,6 +1,7 @@
 use crate::Result;
 use crate::datapoint::DataPoint;
 use crate::storage_csv::write_csv_record;
+use chrono;
 use serde::{Deserialize, Serialize};
 
 pub trait ChannelDataAquisition {
@@ -66,5 +67,15 @@ impl Channel {
         }
         self.datapoints = vec![];
         Ok(())
+    }
+
+    pub fn datapoints_as_vectors(&self) -> Result<(Vec<chrono::DateTime<chrono::Utc>>, Vec<f64>)> {
+        let mut datetimes: Vec<chrono::DateTime<chrono::Utc>> = Vec::new();
+        let mut values: Vec<f64> = Vec::new();
+        for datapoint in self.datapoints.iter() {
+            datetimes.push(datapoint.datetime);
+            values.push(datapoint.value);
+        }
+        return Ok((datetimes, values));
     }
 }

@@ -1,6 +1,8 @@
-use crate::channel::ChannelInfo;
+use crate::channel::{ ChannelInfo, Channel };
 use crate::daq::{ Daq, DaqInfo };
-use crate::device::DeviceInfo;
+use crate::datapoint::DataPoint;
+use crate::device::{ Device, DeviceInfo };
+use crate::hardware::Hardware;
 use crate::Result;
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -18,6 +20,7 @@ use serde::{ Deserialize, Serialize };
 /// To maintain a typical format for the csv file a json will be used to store
 /// any additional information about the test or setup.
 
+
 #[derive(Serialize, Deserialize)]
 pub struct DeviceHeader {
     pub info: DeviceInfo,
@@ -27,13 +30,6 @@ pub struct DeviceHeader {
 pub struct DaqHeader {
     pub info: DaqInfo,
     pub devices: Vec<DeviceHeader>,
-}
-
-pub struct ChannelReadData {
-    // pub device_name: String,
-    // pub channel_name: String,
-    pub timestamps: Vec<i64>,
-    pub values: Vec<f64>,
 }
 
 pub fn check_file_extension(path: &std::path::PathBuf, extension: &OsStr) -> Result<()> {
@@ -47,7 +43,7 @@ pub fn check_file_extension(path: &std::path::PathBuf, extension: &OsStr) -> Res
     Ok(())
 }
 
-pub fn create_json_file(path: &std::path::PathBuf, daq: &Daq) -> Result<()> {
+pub fn write_json_file(path: &std::path::PathBuf, daq: &Daq) -> Result<()> {
     check_file_extension(path, OsStr::new("json"))?;
     let header = DaqHeader{
         info: daq.info.clone(),
@@ -75,7 +71,7 @@ pub fn read_json_file(path: &std::path::PathBuf) -> Result<DaqHeader> {
     return Ok(header);
 }
 
-pub fn create_csv_file(path: &std::path::PathBuf) -> Result<csv::Writer<std::fs::File>> {
+pub fn write_csv_file(path: &std::path::PathBuf) -> Result<csv::Writer<std::fs::File>> {
     check_file_extension(path, OsStr::new("csv"))?;
     let mut wtr = csv::Writer::from_path(path)?;
     wtr.write_record(&["Device", "Channel", "Timestamp", "Value"])?;
@@ -88,7 +84,7 @@ pub fn write_csv_record(wtr: &mut csv::Writer<std::fs::File>, device_name: &str,
     return Ok(());
 }
 
-pub fn read_csv_file(path: &std::path::PathBuf) -> Result<HashMap<String, HashMap<String, i64>>> {
+pub fn read_csv_file(path: &std::path::PathBuf) -> Result<HashMap<String, HashMap<String, Vec<DataPoint>>>> {
     // let read_data: Vec<ChannelReadData> = vec![];
     let mut device_map = HashMap::new();
 
@@ -96,23 +92,64 @@ pub fn read_csv_file(path: &std::path::PathBuf) -> Result<HashMap<String, HashMa
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(true)
         .from_path(path)?;
-    for result in rdr.records() {
+    for result  in rdr.records() {
         let record = result?;
-        if record.len() == 4 {
-            let device_name = record[0].to_string();
-            let channel_name = record[1].to_string();
-            let timestamp: DateTime<Utc> = record[2].parse()?;
-            let value: f64 = record[3].parse()?;
-
-            let channel_map = device_map.entry(device_name).or_insert(HashMap::new());
-            let results_map = channel_map.entry(channel_name).or_insert(0);
-
-        }
-        else {
+        if record.len() < 4 {
             return Err("csv record not of length 4".into());
         }
+        let device_name = record[0].to_string();
+        let channel_name = record[1].to_string();
+        let timestamp: DateTime<Utc> = record[2].parse()?;
+        let value: f64 = record[3].parse()?;
+
+        let datapoint = DataPoint{datetime: timestamp, value: value};
+
+        let channel_map = device_map.entry(device_name).or_insert(HashMap::new());
+        let datapoints = channel_map.entry(channel_name).or_insert(Vec::new());
+        datapoints.push(datapoint);
     }
-    Ok(device_map)
+    Ok((device_map))
+}
+
+pub fn read_results(csv_path: &std::path::PathBuf, json_path: &std::path::PathBuf) -> Result<Daq> {
+    let header = read_json_file(json_path)?;
+    let device_map = read_csv_file(csv_path)?;
+
+    let mut devices: Vec<Device> = Vec::new();
+    for device_header in header.devices.iter() {
+        let channel_map = match device_map.get(&device_header.info.name) {
+            Some(map) => map,
+            _ => return Err(format!("Device '{}' missing from csv read", &device_header.info.name).into()),
+        };
+        let mut channels: Vec<Channel> = Vec::new();
+        for channel_info in device_header.channels.iter() {
+            let datapoints  = match channel_map.get(&channel_info.name) {
+                Some(data) => data,
+                None => return Err(format!("Channel '{}' missing from csv read", &channel_info.name).into()),
+            };
+            let channel = Channel {
+                info: channel_info.clone(),
+                datapoints: datapoints.clone(),
+                datapoint_last: None,
+            };
+            channels.push(channel);
+        }
+        let device = Device {
+            info: device_header.info.clone(),
+            channels: channels,
+            hardware: Hardware::None,
+        };
+        devices.push(device);
+
+    }
+    let daq = Daq {
+        info: header.info,
+        devices: devices,
+        json_path: json_path.clone(),
+        csv_path: csv_path.clone(),
+        csv_writer: None,
+    };
+    return Ok(daq);
 }
 
 #[cfg(test)]

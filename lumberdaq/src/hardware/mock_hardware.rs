@@ -23,8 +23,9 @@ impl MockHardware {
 }
 
 impl DeviceInterface for MockHardware {
-    fn connect(&mut self) {
+    fn connect(&mut self) -> Result<()> {
         println!("Connected to mock device.");
+        Ok(())
     }
 }
 
