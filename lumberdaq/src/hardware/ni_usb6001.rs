@@ -19,8 +19,15 @@ pub struct NiUsb6001 {
 
 impl DeviceInterface for NiUsb6001 {
     fn connect(&mut self) -> Result<()> {
-        // self.task.start();  // Optional
-        println!("Connected to NI USB-6001.");
+        match &mut self.task {
+            Some(task) => {
+                task.start()?;
+                println!("Connected to NI USB-6001.");
+            },
+            None => {
+                return Err("No task set for NI 6001 device".into())
+            }
+        }
         Ok(())
     }
 }

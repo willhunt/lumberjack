@@ -1,8 +1,9 @@
 // Add module 'hardware' in hardware folder
 pub mod mock_hardware;
 pub mod ni_usb6001;
+// pub mod serial_stream;
+
 use crate::datapoint::DataPoint;
-// pub mod firmata;
 use crate::Result;
 use mock_hardware::{ MockHardware, MockHardwareInput };
 use ni_usb6001::{ NiUsb6001, NiUsb6001Input };

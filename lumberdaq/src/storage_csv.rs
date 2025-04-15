@@ -1,7 +1,7 @@
 use crate::channel::{ ChannelInfo, Channel };
 use crate::daq::{ Daq, DaqInfo };
 use crate::datapoint::DataPoint;
-use crate::device::{ Device, DeviceInfo };
+use crate::device::{ Device, DeviceInfo, ConnectionStatus };
 use crate::hardware::Hardware;
 use crate::Result;
 use std::collections::HashMap;
@@ -138,6 +138,7 @@ pub fn read_results(csv_path: &std::path::PathBuf, json_path: &std::path::PathBu
             info: device_header.info.clone(),
             channels: channels,
             hardware: Hardware::None,
+            connection: ConnectionStatus::unconnected,
         };
         devices.push(device);
 
