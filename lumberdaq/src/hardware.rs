@@ -1,12 +1,13 @@
 // Add module 'hardware' in hardware folder
 pub mod mock_hardware;
 pub mod ni_usb6001;
-// pub mod serial_stream;
+pub mod serial_stream;
 
 use crate::datapoint::DataPoint;
 use crate::Result;
 use mock_hardware::{ MockHardware, MockHardwareInput };
 use ni_usb6001::{ NiUsb6001, NiUsb6001Input };
+use serial_stream:: { SerialStream, SerialStreamInput };
 use crate::device::DeviceInterface;
 use serde::{ Deserialize, Serialize };
 
@@ -19,17 +20,15 @@ pub trait HardwareDataAquisition {
 pub enum Hardware {
     MockHardware(MockHardware),
     NiUsb6001(NiUsb6001),
+    SerialStream(SerialStream),
     None,
 }
 impl HardwareDataAquisition for Hardware {
     fn read(&mut self) -> Result<Vec<Vec<DataPoint>>> {
         match self {
-            Hardware::MockHardware(device) => {
-                device.read()
-            },
-            Hardware::NiUsb6001(device) => {
-                device.read()
-            },
+            Hardware::MockHardware(device) => device.read(),
+            Hardware::NiUsb6001(device) => device.read(),
+            Hardware::SerialStream(device) => device.read(),
             Hardware::None => Err("No hardware is available for this device. Typically this type is used for reading data.".into())
         }
     }
@@ -37,13 +36,9 @@ impl HardwareDataAquisition for Hardware {
 impl DeviceInterface for Hardware {
     fn connect(&mut self) -> Result<()> {
         match self {
-            Hardware::MockHardware(device) => {
-                device.connect()?;
-            },
-
-            Hardware::NiUsb6001(device) => {
-                device.connect()?
-            },
+            Hardware::MockHardware(device) => device.connect()?,
+            Hardware::NiUsb6001(device) => device.connect()?,
+            Hardware::SerialStream(device) => device.connect()?,
             Hardware::None => return Err("No hardware is available for this device. Typically this type is used for reading data.".into())
         }
         Ok(())
@@ -54,4 +49,5 @@ impl DeviceInterface for Hardware {
 pub enum Input {
     MockHardware(MockHardwareInput),
     NiUsb6001(NiUsb6001Input),
+    SerialStreamInput(SerialStreamInput),
 }

@@ -956,6 +956,7 @@ dependencies = [
  "mach2",
  "nix",
  "scopeguard",
+ "serde",
  "unescaper",
  "winapi",
 ]

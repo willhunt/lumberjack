@@ -11,7 +11,7 @@ use daqmx::types::Timeout;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct NiUsb6001 {
-    decription: String,
+    description: String,
     inputs: Vec<NiUsb6001Input>,
     #[serde(skip)]
     task: Option<Task<AnalogInput>>,
@@ -61,7 +61,7 @@ impl NiUsb6001 {
     pub fn new(name: String) -> Result<NiUsb6001> {
         let mut task = Task::new(&name)?;
         Ok(NiUsb6001 {
-            decription: "National instruments USB-6001 data aquisition device.".to_string(),
+            description: "National instruments USB-6001 data aquisition device.".to_string(),
             inputs: vec![],
             task: Some(task),
         })
