@@ -17,7 +17,6 @@ pub struct Daq {
     pub csv_path: std::path::PathBuf,
     #[serde(skip)]
     pub csv_writer: Option<csv::Writer<std::fs::File>>,
-    // hdf_path: std::path::PathBuf,
 }
 impl Daq {
     pub fn new(name: String, author: String, devices: Vec<Device>, storage_path: std::path::PathBuf) -> Result<Daq> {

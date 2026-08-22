@@ -14,8 +14,7 @@ use serde::{ Deserialize, Serialize };
 
 /// The strategy for storing data as it is being recorded is to use a csv file
 /// Through testing this is much faster than saving a SQLite data base to disk
-/// and HDF5 is also not suited for regular write operations. The data can 
-/// later be converted to HDF5 or another format if required.
+/// and HDF5 is also not suited for regular write operations.
 /// 
 /// To maintain a typical format for the csv file a json will be used to store
 /// any additional information about the test or setup.

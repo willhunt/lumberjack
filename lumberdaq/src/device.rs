@@ -82,8 +82,6 @@ impl Device {
         }
         Ok(())
     }
-    
-    // pub fn add_to_hdf(&self, file: )
 
 }
 
