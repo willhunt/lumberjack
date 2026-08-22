@@ -1,5 +1,4 @@
 pub mod hardware;
-// use hardware::{ mock_hardware, ni_usb6001 };
 mod error;
 pub use self::error::{Error, Result};
 pub mod datapoint;

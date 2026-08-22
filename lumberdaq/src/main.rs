@@ -1,6 +1,6 @@
 use lumberdaq::configuration::write_configuration_file;
 use lumberdaq::daq::Daq;
-use lumberdaq::hardware::{mock_hardware, ni_usb6001};
+use lumberdaq::hardware::mock_hardware;
 use lumberdaq::Result;
 use std::{thread, time};
 
@@ -16,19 +16,7 @@ fn main() -> Result<()> {
         mock_hardware::create_device("Test device".to_string(), "-".to_string())?;
     mock_hardware::add_channel_random(&mut mock_hardware, "Random 1".to_string())?;
 
-    // National instruments
-    let mut usb6001 =
-        ni_usb6001::create_device("Virtual USB-6001".to_string(), "NIUSB-6001".to_string())?;
-    ni_usb6001::add_channel_analog(
-        &mut usb6001,
-        "Virtual signal 0".to_string(),
-        "NIUSB-6001/ai0".to_string(),
-    )?;
-    ni_usb6001::add_channel_analog(
-        &mut usb6001,
-        "Virtual signal 1".to_string(),
-        "NIUSB-6001/ai1".to_string(),
-    )?;
+    // TODO: Pico Technology / LabJack backends go here.
 
     // Serial device
     // let serial_port = serialport::SerialPortInfo {
@@ -39,7 +27,7 @@ fn main() -> Result<()> {
     let mut daq = Daq::new(
         "Example measurement".to_string(),
         "Joesephine Bloggs".to_string(),
-        vec![mock_hardware, usb6001],
+        vec![mock_hardware],
         storage_path,
     )?;
 
