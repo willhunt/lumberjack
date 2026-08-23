@@ -14,3 +14,9 @@ description = "Safe wrappers over the Pico Technology data logger drivers"
 # old daqmx-rs dependency painful.
 [dependencies]
 libloading = "0.8"
+# Only so settings can live in a config file. Off by default: talking to a
+# unit does not need it.
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+serde = ["dep:serde"]

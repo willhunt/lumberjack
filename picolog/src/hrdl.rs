@@ -33,6 +33,8 @@ pub const MAX_CHANNEL: u16 = 16;
 // ---------------------------------------------------------------------------
 
 /// Full scale input range. Values are the header's, not invented here.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoltageRange {
     MilliVolts2500,
@@ -69,8 +71,11 @@ impl VoltageRange {
 /// This is the floor on how fast a unit can be read: a scan costs at least this
 /// much for every enabled channel, so eight channels at the fastest setting is
 /// already most of half a second.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConversionTime {
+    #[default]
     Ms60,
     Ms100,
     Ms180,

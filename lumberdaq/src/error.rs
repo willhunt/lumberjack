@@ -39,6 +39,9 @@ pub enum Error {
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 
+    #[error(transparent)]
+    Pico(#[from] picolog::hrdl::Error),
+
     // ---- Hardware ----------------------------------------------------------
     #[error("no hardware is configured for this device")]
     NoHardware,
@@ -114,6 +117,11 @@ impl Error {
             // The port itself is unhappy: unplugged, or the OS handle is gone.
             Error::Io(_) => true,
             Error::SerialPort(_) => true,
+            // A missing driver or an absent unit is the device not
+            // being there; a rejected setting is the config being wrong.
+            Error::Pico(picolog::hrdl::Error::DriverNotFound { .. }) => true,
+            Error::Pico(picolog::hrdl::Error::NoUnitFound) => true,
+            Error::Pico(picolog::hrdl::Error::SymbolMissing(_)) => true,
             // Framing, parsing and configuration problems. The device is there;
             // what it sent, or what we asked for, is wrong.
             _ => false,

@@ -1,11 +1,13 @@
 // Add module 'hardware' in hardware folder
 pub mod mock_hardware;
+pub mod pico_hrdl;
 pub mod serial_stream;
 
 use crate::channel::ChannelInfo;
 use crate::datapoint::DataPoint;
 use crate::{ Error, Result };
 use mock_hardware::{ MockHardware, MockHardwareConfig };
+use pico_hrdl::{ PicoHrdl, PicoHrdlConfig };
 use serial_stream:: { SerialStream, SerialStreamConfig };
 use crate::device::DeviceInterface;
 use serde::{ Deserialize, Serialize };
@@ -23,6 +25,7 @@ pub trait HardwareDataAquisition {
 #[serde(tag = "type")]  // Adds "type: MockHardware" identifies to serilaized output, https://serde.rs/enum-representations.html
 pub enum HardwareConfig {
     MockHardware(MockHardwareConfig),
+    PicoHrdl(PicoHrdlConfig),
     SerialStream(SerialStreamConfig),
     None,
 }
@@ -38,6 +41,9 @@ impl HardwareConfig {
             HardwareConfig::MockHardware(config) => {
                 config.channels.iter().map(|channel| channel.info.clone()).collect()
             }
+            HardwareConfig::PicoHrdl(config) => {
+                config.channels.iter().map(|channel| channel.info.clone()).collect()
+            }
             HardwareConfig::SerialStream(config) => {
                 config.channels.iter().map(|channel| channel.info.clone()).collect()
             }
@@ -50,6 +56,7 @@ impl HardwareConfig {
 /// it needs. Deliberately not Serialize and not Clone.
 pub enum Hardware {
     MockHardware(MockHardware),
+    PicoHrdl(PicoHrdl),
     SerialStream(SerialStream),
     None,
 }
@@ -59,6 +66,7 @@ impl Hardware {
     pub fn from_config(config: HardwareConfig) -> Result<Hardware> {
         Ok(match config {
             HardwareConfig::MockHardware(config) => Hardware::MockHardware(MockHardware::from_config(config)?),
+            HardwareConfig::PicoHrdl(config) => Hardware::PicoHrdl(PicoHrdl::from_config(config)?),
             HardwareConfig::SerialStream(config) => Hardware::SerialStream(SerialStream::from_config(config)?),
             HardwareConfig::None => Hardware::None,
         })
@@ -69,6 +77,7 @@ impl Hardware {
     pub fn config(&self) -> HardwareConfig {
         match self {
             Hardware::MockHardware(device) => HardwareConfig::MockHardware(device.config()),
+            Hardware::PicoHrdl(device) => HardwareConfig::PicoHrdl(device.config()),
             Hardware::SerialStream(device) => HardwareConfig::SerialStream(device.config()),
             Hardware::None => HardwareConfig::None,
         }
@@ -78,6 +87,7 @@ impl HardwareDataAquisition for Hardware {
     fn read(&mut self) -> Result<Vec<Vec<DataPoint>>> {
         match self {
             Hardware::MockHardware(device) => device.read(),
+            Hardware::PicoHrdl(device) => device.read(),
             Hardware::SerialStream(device) => device.read(),
             Hardware::None => Err(Error::NoHardware)
         }
@@ -87,6 +97,7 @@ impl DeviceInterface for Hardware {
     fn connect(&mut self) -> Result<()> {
         match self {
             Hardware::MockHardware(device) => device.connect()?,
+            Hardware::PicoHrdl(device) => device.connect()?,
             Hardware::SerialStream(device) => device.connect()?,
             Hardware::None => return Err(Error::NoHardware)
         }

@@ -13,6 +13,7 @@ serialport = { version = "4.5.0", features = ["serde"] }
 ndarray = "0.16.1"
 regex = "1.13.1"
 thiserror = "2.0.20"
+picolog = { path = "../picolog", features = ["serde"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 ctrlc = "3.5.2"
 
