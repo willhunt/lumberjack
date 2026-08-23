@@ -13,7 +13,7 @@ pub trait HardwareDataAquisition {
     fn read(&mut self) -> Result<Vec<Vec<DataPoint>>>;
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]  // Adds "type: MockHardware" identifies to serilaized output, https://serde.rs/enum-representations.html
 pub enum Hardware {
     MockHardware(MockHardware),

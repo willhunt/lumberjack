@@ -17,26 +17,6 @@
           "description": "Random number generator"
         }
       ]
-    },
-    {
-      "info": {
-        "name": "Virtual USB-6001",
-        "description": "NIUSB-6001"
-      },
-      "channels": [
-        {
-          "id": "NIUSB-6001/ai0",
-          "name": "Virtual signal 0",
-          "unit": "V",
-          "description": "Analog input channel"
-        },
-        {
-          "id": "NIUSB-6001/ai1",
-          "name": "Virtual signal 1",
-          "unit": "V",
-          "description": "Analog input channel"
-        }
-      ]
     }
   ]
 }

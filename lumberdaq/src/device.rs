@@ -16,12 +16,12 @@ pub struct DeviceInfo {
 
 #[derive(Clone, Default)]
 pub enum ConnectionStatus{
-    connected,
+    Connected,
     #[default]
-    unconnected,
+    Unconnected,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize)]
 pub struct Device {
     pub info: DeviceInfo,
     pub channels: Vec<Channel>,
@@ -39,7 +39,7 @@ impl Device {
             },            
             channels: vec![],
             hardware: hardware,
-            connection: ConnectionStatus::unconnected,
+            connection: ConnectionStatus::Unconnected,
         }
     }
 
@@ -61,14 +61,15 @@ impl Device {
     }
 
     pub fn read(&mut self) -> Result<()> {
+        // TODO: If not connected, attempt to connect and then try to read again maybe?
         match self.connection {
-            ConnectionStatus::connected => {
+            ConnectionStatus::Connected => {
                 let mut input_readings = self.hardware.read()?;
                 for (channel, datapoints) in self.channels.iter_mut().zip(input_readings.iter_mut()) {
                     channel.add_datapoints(datapoints)?;
                 }
             },
-            ConnectionStatus::unconnected => {
+            ConnectionStatus::Unconnected => {
                 self.connect()?;
             }
         }
@@ -88,9 +89,9 @@ impl Device {
 impl DeviceInterface for Device {
     fn connect(&mut self) -> Result<()> {
         match self.hardware.connect() {
-            Ok(()) => self.connection = ConnectionStatus::connected,
+            Ok(()) => self.connection = ConnectionStatus::Connected,
             Err(e) => {
-                self.connection = ConnectionStatus::unconnected;
+                self.connection = ConnectionStatus::Unconnected;
                 return Err(e);
             },
         }

@@ -3,10 +3,10 @@ use crate::datapoint::DataPoint;
 use crate::channel::{ Channel, ChannelDataAquisition };
 use crate::device::{ Device, DeviceInterface };
 use crate::hardware::{HardwareDataAquisition, Hardware };
-use serde::{ de, Deserialize, Serialize };
+use serde::{ Deserialize, Serialize };
 use serialport;
 use chrono;
-use std::io::{self, Read};
+// use std::io::{self, Read};
 use std::time::Duration;
 
 #[derive(Serialize, Deserialize)]  // Cloning an issue with serialport
@@ -23,7 +23,7 @@ pub struct SerialStream {
 
 impl DeviceInterface for SerialStream {
     fn connect(&mut self) -> Result<()> {
-        let port = serialport::new(&self.port, self.baudrate)
+        let _port = serialport::new(&self.port, self.baudrate)
             .timeout(Duration::from_millis(100))
             .open()?;
         Ok(())
@@ -34,7 +34,7 @@ impl DeviceInterface for SerialStream {
 impl HardwareDataAquisition for SerialStream {
     fn read(&mut self) -> Result<Vec<Vec<DataPoint>>> {
         let mut readings: Vec<Vec<DataPoint>> = vec![];
-        let timestamp = chrono::Utc::now();
+        let _timestamp = chrono::Utc::now();
         /////////////////////////////////////////////// TODO
         Ok(readings)
     }
@@ -59,7 +59,7 @@ pub enum SerialStreamInput {
 impl ChannelDataAquisition for SerialStreamInput {
     fn read(&mut self) -> Result<Vec<DataPoint>> {
         match self {
-            SerialStreamInput::LineInput {index: i64} => {
+            SerialStreamInput::LineInput {index: _} => {
                 Err("Channels for this device must be read all together by the device read method.".into())
             },
         }

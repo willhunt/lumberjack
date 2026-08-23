@@ -107,7 +107,7 @@ pub fn read_csv_file(path: &std::path::PathBuf) -> Result<HashMap<String, HashMa
         let datapoints = channel_map.entry(channel_name).or_insert(Vec::new());
         datapoints.push(datapoint);
     }
-    Ok((device_map))
+    Ok(device_map)
 }
 
 pub fn read_results(csv_path: &std::path::PathBuf, json_path: &std::path::PathBuf) -> Result<Daq> {
@@ -137,7 +137,7 @@ pub fn read_results(csv_path: &std::path::PathBuf, json_path: &std::path::PathBu
             info: device_header.info.clone(),
             channels: channels,
             hardware: Hardware::None,
-            connection: ConnectionStatus::unconnected,
+            connection: ConnectionStatus::Unconnected,
         };
         devices.push(device);
 
