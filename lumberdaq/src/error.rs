@@ -36,6 +36,9 @@ pub enum Error {
     #[error(transparent)]
     ParseTimestamp(#[from] chrono::ParseError),
 
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+
     // ---- Hardware ----------------------------------------------------------
     #[error("no hardware is configured for this device")]
     NoHardware,
@@ -45,6 +48,10 @@ pub enum Error {
 
     #[error("cannot add a {expected} channel to this device")]
     WrongHardwareType { expected: String },
+
+    // ---- Storage -----------------------------------------------------------
+    #[error("channel '{channel}' of device '{device}' is not in the recorded setup")]
+    UnknownChannel { device: String, channel: String },
 
     // ---- Serial framing and parsing ----------------------------------------
     #[error("frame pattern '{pattern}' for serial port {port} is not a valid regular expression")]

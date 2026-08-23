@@ -1,7 +1,9 @@
 use lumberdaq::daq::Daq;
 use lumberdaq::hardware::{ mock_hardware, serial_stream };
 use lumberdaq::project::Project;
+#[allow(unused_imports)]
 use lumberdaq::storage_csv::CsvSink;
+use lumberdaq::storage_sqlite::SqliteSink;
 use lumberdaq::Result;
 use std::{thread, time};
 
@@ -51,9 +53,17 @@ fn main() -> Result<()> {
         vec![mock_hardware, serial_hardware],
     )?;
 
-    // Setup storage. Swapping csv for another format is a change to this line
-    // only; nothing downstream of here knows the format.
-    let sink = CsvSink::new(&project.results_path(), &project.header_path())?;
+    // Setup storage. Nothing downstream of here knows the format, so choosing
+    // one is this line and nothing else.
+    //
+    //   csv     long format plus a json sidecar. Append only, so a run that
+    //           dies halfway still leaves a readable file, and anything can
+    //           open it.
+    //   sqlite  normalised, so device and channel names are stored once
+    //           instead of on every row, the setup lives in the same file, and
+    //           reading one channel back is an indexed lookup.
+    let sink = SqliteSink::new(&project.database_path())?;
+    // let sink = CsvSink::new(&project.results_path(), &project.header_path())?;
     daq.set_sink(Box::new(sink))
         .unwrap_or_else(|err| panic!("Error intitialising storage: {err}"));
     // Connect to devices. Every device is tried, so one bad port does not hide

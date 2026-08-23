@@ -9,4 +9,5 @@ pub mod config;
 pub mod project;
 pub mod storage;
 pub mod storage_csv;
+pub mod storage_sqlite;
 pub mod configuration;

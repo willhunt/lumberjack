@@ -7,3 +7,6 @@
 results.csv
 results.json
 *.hdf
+results.db
+results.db-wal
+results.db-shm

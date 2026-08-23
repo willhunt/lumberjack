@@ -46,8 +46,14 @@ impl Project {
     }
 
     /// The sidecar describing what is in the results file.
+    ///
+    /// Only the csv sink needs this. A database keeps its own description.
     pub fn header_path(&self) -> PathBuf {
         self.directory.join("results.json")
+    }
+
+    pub fn database_path(&self) -> PathBuf {
+        self.directory.join("results.db")
     }
 
     pub fn read_config(&self) -> Result<DaqConfig> {
