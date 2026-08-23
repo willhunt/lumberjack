@@ -53,6 +53,9 @@ pub enum Error {
     #[error("channel '{channel}' of device '{device}' is not in the recorded setup")]
     UnknownChannel { device: String, channel: String },
 
+    #[error("this results database uses schema version {found}, but this build writes version {expected}; record to a new file, or delete the old one")]
+    DatabaseSchemaVersion { found: i32, expected: i32 },
+
     // ---- Serial framing and parsing ----------------------------------------
     #[error("frame pattern '{pattern}' for serial port {port} is not a valid regular expression")]
     InvalidFramePattern {

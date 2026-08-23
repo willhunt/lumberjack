@@ -12,8 +12,8 @@ use std::path::Path;
 /// channel that is described once.
 ///
 /// ```text
-/// daq       one row: the test name and author
-/// devices   one row per device
+/// runs      one row per recording session: name, author, when it started
+/// devices   one row per device, belonging to a run
 /// channels  one row per channel, pointing at its device
 /// readings  channel_id, timestamp, value
 /// ```
@@ -21,8 +21,17 @@ use std::path::Path;
 /// Because the description lives in the same file as the data, there is no
 /// sidecar to keep in step with it.
 ///
+/// A database holds many runs rather than one. Recording again appends a new
+/// run instead of failing or overwriting, which is what a csv does today: it
+/// truncates, so a second run silently destroys the first.
+///
 /// Timestamps are stored as microseconds since the epoch rather than as text:
 /// smaller, and no string to format per row.
+/// Stamped into the file so a database written by a different version of the
+/// schema is refused with an explanation rather than a raw SQL error about a
+/// missing column. Bump it whenever the tables change.
+const SCHEMA_VERSION: i32 = 1;
+
 pub struct SqliteSink {
     connection: Connection,
     /// device name -> channel name -> row id, built once from the header so a
@@ -54,6 +63,35 @@ impl SqliteSink {
         })
     }
 
+    /// Refuse a database whose tables were written by a different schema.
+    ///
+    /// An empty file is stamped with the current version. A file that already
+    /// has tables but does not match gets a clear error, because the failure
+    /// otherwise surfaces much later as a missing column.
+    fn check_schema_version(&mut self) -> Result<()> {
+        let tables: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
+            [],
+            |row| row.get(0),
+        )?;
+        let found: i32 =
+            self.connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))?;
+
+        if tables == 0 {
+            self.connection
+                .pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            return Ok(());
+        }
+        if found != SCHEMA_VERSION {
+            return Err(Error::DatabaseSchemaVersion {
+                found: found,
+                expected: SCHEMA_VERSION,
+            });
+        }
+        Ok(())
+    }
+
     /// Open a transaction if one is not already open.
     ///
     /// Inserts outside a transaction get one each, and every transaction is a
@@ -70,15 +108,23 @@ impl SqliteSink {
 
 impl DataSink for SqliteSink {
     fn init(&mut self, header: &DaqHeader) -> Result<()> {
+        self.check_schema_version()?;
         self.connection.execute_batch(
-            "CREATE TABLE IF NOT EXISTS daq (
+            "CREATE TABLE IF NOT EXISTS runs (
+                 id          INTEGER PRIMARY KEY,
                  name        TEXT NOT NULL,
-                 author      TEXT NOT NULL
+                 author      TEXT NOT NULL,
+                 started     TEXT NOT NULL
              );
+             -- Device and channel names are unique within a run, not across the
+             -- file, so recording the same rig again is a new run rather than a
+             -- clash with the last one.
              CREATE TABLE IF NOT EXISTS devices (
                  id          INTEGER PRIMARY KEY,
-                 name        TEXT NOT NULL UNIQUE,
-                 description TEXT NOT NULL
+                 run_id      INTEGER NOT NULL REFERENCES runs(id),
+                 name        TEXT NOT NULL,
+                 description TEXT NOT NULL,
+                 UNIQUE(run_id, name)
              );
              CREATE TABLE IF NOT EXISTS channels (
                  id          INTEGER PRIMARY KEY,
@@ -99,14 +145,19 @@ impl DataSink for SqliteSink {
         )?;
 
         self.connection.execute(
-            "INSERT INTO daq (name, author) VALUES (?1, ?2)",
-            rusqlite::params![header.info.name, header.info.author],
+            "INSERT INTO runs (name, author, started) VALUES (?1, ?2, ?3)",
+            rusqlite::params![
+                header.info.name,
+                header.info.author,
+                chrono::Utc::now().to_rfc3339()
+            ],
         )?;
+        let run_id = self.connection.last_insert_rowid();
 
         for device in header.devices.iter() {
             self.connection.execute(
-                "INSERT INTO devices (name, description) VALUES (?1, ?2)",
-                rusqlite::params![device.info.name, device.info.description],
+                "INSERT INTO devices (run_id, name, description) VALUES (?1, ?2, ?3)",
+                rusqlite::params![run_id, device.info.name, device.info.description],
             )?;
             let device_id = self.connection.last_insert_rowid();
 
@@ -221,6 +272,9 @@ mod tests {
         sink
     }
 
+    /// A directory with nothing in it. Note the tests that check what happens
+    /// on a *second* run deliberately reuse the same directory rather than
+    /// calling this twice, since starting clean is what hid the bug.
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("lumberdaq_{}", name));
         let _ = std::fs::remove_dir_all(&dir);
@@ -289,5 +343,91 @@ mod tests {
             .unwrap();
         assert_eq!(name, "Pressure");
         assert_eq!(unit, "Pa");
+    }
+
+    /// Recording twice into the same file used to fail on the unique constraint
+    /// over device names. A second run is a second run, not a clash.
+    #[test]
+    fn recording_again_adds_a_run_rather_than_failing() {
+        let dir = temp_dir("sqlite_second_run");
+
+        let mut first = sink_in(&dir);
+        first.write_batch(&batch(&[1.0, 2.0])).unwrap();
+        first.flush().unwrap();
+        drop(first);
+
+        let mut second = sink_in(&dir);
+        second.write_batch(&batch(&[3.0])).unwrap();
+        second.flush().unwrap();
+
+        let runs: i64 = second
+            .connection
+            .query_row("SELECT COUNT(*) FROM runs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(runs, 2);
+
+        // Both runs' data is present, and each is attributable to its own run.
+        let per_run: Vec<(i64, i64)> = second
+            .connection
+            .prepare(
+                "SELECT d.run_id, COUNT(*) FROM readings r
+                   JOIN channels c ON c.id = r.channel_id
+                   JOIN devices  d ON d.id = c.device_id
+                  GROUP BY d.run_id ORDER BY d.run_id",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        assert_eq!(per_run, vec![(1, 2), (2, 1)]);
+    }
+
+    /// A database from an older schema should say so, rather than failing later
+    /// with a complaint about a missing column.
+    #[test]
+    fn a_database_from_another_schema_is_refused() {
+        let dir = temp_dir("sqlite_schema");
+        let path = dir.join("results.db");
+        {
+            let old = Connection::open(&path).unwrap();
+            old.execute_batch("CREATE TABLE devices (id INTEGER PRIMARY KEY, name TEXT);")
+                .unwrap();
+            old.pragma_update(None, "user_version", 0).unwrap();
+        }
+        let mut sink = SqliteSink::new(&path).unwrap();
+        assert!(matches!(
+            sink.init(&header()),
+            Err(Error::DatabaseSchemaVersion { found: 0, expected: 1 })
+        ));
+    }
+
+    /// A later run must not steer its readings into the earlier run's channels.
+    #[test]
+    fn a_second_run_writes_to_its_own_channels() {
+        let dir = temp_dir("sqlite_run_isolation");
+
+        let mut first = sink_in(&dir);
+        first.write_batch(&batch(&[1.0])).unwrap();
+        first.flush().unwrap();
+        drop(first);
+
+        let mut second = sink_in(&dir);
+        second.write_batch(&batch(&[2.0])).unwrap();
+        second.flush().unwrap();
+
+        let channel_id: i64 = second
+            .connection
+            .query_row(
+                "SELECT DISTINCT r.channel_id FROM readings r
+                   JOIN channels c ON c.id = r.channel_id
+                   JOIN devices  d ON d.id = c.device_id
+                  WHERE d.run_id = 2",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        // Run 2's readings belong to run 2's channel row, not run 1's.
+        assert_ne!(channel_id, 1);
     }
 }
