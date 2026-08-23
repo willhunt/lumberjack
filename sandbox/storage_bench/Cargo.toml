@@ -1,0 +1,16 @@
+[package]
+name = "storage_bench"
+version = "0.1.0"
+edition = "2021"
+
+# Deliberately a separate crate from lumberdaq. Benchmarking SQLite needs
+# rusqlite, and there is no reason for the library to carry that dependency
+# just so we can measure something.
+
+[dependencies]
+chrono = "0.4"
+csv = "1.3"
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+[profile.release]
+debug = true
