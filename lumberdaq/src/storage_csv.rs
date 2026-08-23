@@ -27,7 +27,7 @@ pub fn check_file_extension(path: &std::path::PathBuf, extension: &OsStr) -> Res
             &extension,
             &path.extension()    
         );
-        return Err(Box::new(std::io::Error::new(ErrorKind::InvalidData, error_msg)));
+        return Err(std::io::Error::new(ErrorKind::InvalidData, error_msg).into());
     }
     Ok(())
 }
