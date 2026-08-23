@@ -112,12 +112,10 @@ pub fn create_device(name: String, description: String) -> Result<Device> {
 }
 
 pub fn add_channel_random(device: &mut Device, name: String) -> Result<()> {
-    let id = format!("c{}", device.channels.len());
     match &mut device.hardware {
         Hardware::MockHardware(hardware) => {
             hardware.add_channel(MockHardwareChannel {
                 info: ChannelInfo {
-                    id: id,
                     name: name,
                     unit: "-".to_string(),
                     description: "Random number generator".to_string(),

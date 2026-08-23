@@ -48,7 +48,7 @@ pub struct SqliteSink {
 /// Stamped into the file so a database written by a different version of the
 /// schema is refused with an explanation rather than a raw SQL error about a
 /// missing column. Bump it whenever the tables change.
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 impl SqliteSink {
     pub fn new(path: &Path) -> Result<SqliteSink> {
@@ -280,7 +280,6 @@ mod tests {
                     frame_pattern: r"#([^#$]*)\$".to_string(),
                     channels: vec![SerialStreamChannel {
                         info: ChannelInfo {
-                            id: index.to_string(),
                             name: "Pressure".to_string(),
                             unit: "Pa".to_string(),
                             description: "-".to_string(),

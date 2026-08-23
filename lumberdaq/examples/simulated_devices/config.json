@@ -14,7 +14,6 @@
         "description": "This is a mock device that uses no hardware. It is used for testing and development purposes.",
         "channels": [
           {
-            "id": "c0",
             "name": "Random 1",
             "unit": "-",
             "description": "Random number generator",
@@ -36,14 +35,12 @@
         "frame_pattern": "#([^#$]*)\\$",
         "channels": [
           {
-            "id": "1",
             "name": "Pressure",
             "unit": "Pa",
             "description": "Differential pressure sensor",
             "index": 1
           },
           {
-            "id": "3",
             "name": "Pump Activation",
             "unit": "-",
             "description": "Pump on (1) or off (0)",

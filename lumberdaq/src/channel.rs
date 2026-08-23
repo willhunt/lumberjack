@@ -5,8 +5,13 @@ use chrono;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
+/// What a channel is called and what its numbers mean.
+///
+/// Note there is no id here. Which input a channel reads is recorded by the
+/// hardware config, in the one place that binding is defined; a second
+/// identifier alongside the name only invited confusion with the row ids in a
+/// results database.
 pub struct ChannelInfo {
-    pub id: String,
     pub name: String,
     pub unit: String,
     pub description: String,
@@ -25,9 +30,8 @@ impl Channel {
     //     self.data.add_datapoints(&mut datapoints)?;
     //     Ok(())
     // }
-    pub fn new(id: String, name: String, unit: String, description: String) -> Channel {
+    pub fn new(name: String, unit: String, description: String) -> Channel {
         Channel::from_info(ChannelInfo {
-            id: id,
             name: name,
             unit: unit,
             description: description,

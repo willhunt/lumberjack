@@ -233,7 +233,6 @@ pub fn add_channel(device: &mut Device, name: String, description: String, index
         Hardware::SerialStream(hardware) => {
             hardware.add_channel(SerialStreamChannel {
                 info: ChannelInfo {
-                    id: index.to_string(),
                     name: name,
                     unit: unit,
                     description: description,
@@ -259,7 +258,6 @@ mod tests {
     fn line_inputs(indices: &[i64]) -> Vec<SerialStreamChannel> {
         indices.iter().map(|index| SerialStreamChannel {
             info: ChannelInfo {
-                id: index.to_string(),
                 name: format!("Channel {}", index),
                 unit: "-".to_string(),
                 description: "-".to_string(),
