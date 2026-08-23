@@ -4,10 +4,6 @@ use crate::storage::Batch;
 use chrono;
 use serde::{Deserialize, Serialize};
 
-pub trait ChannelDataAquisition {
-    fn read(&mut self) -> Result<Vec<DataPoint>>;
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ChannelInfo {
     pub id: String,

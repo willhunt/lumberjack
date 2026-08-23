@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::datapoint::DataPoint;
-use crate::channel::{ ChannelInfo, ChannelDataAquisition };
+use crate::channel::ChannelInfo;
 use crate::device::{ Device, DeviceInterface };
 use crate::hardware::{HardwareDataAquisition, Hardware };
 use serde::{Deserialize, Serialize};
@@ -81,7 +81,13 @@ pub enum MockHardwareInput {
     Random,
     Constant(f64),
 }
-impl ChannelDataAquisition for MockHardwareInput {
+impl MockHardwareInput {
+    /// Produce this input's next value.
+    ///
+    /// Inherent rather than a trait method: the mock is the only hardware that
+    /// can produce a single channel on demand. Real instruments hand over every
+    /// channel in one transaction, and a backend that does poll channels
+    /// individually can simply loop inside its own device level `read`.
     fn read(&mut self) -> Result<Vec<DataPoint>> {
         match self {
             MockHardwareInput::Random => {
