@@ -1,5 +1,5 @@
 use crate::{ Error, Result };
-use crate::config::{ DaqConfig, DeviceConfig };
+use crate::config::{ DaqConfig, DeviceConfig, StorageFormat };
 use crate::device::Device;
 use crate::session::{ run_device, DeviceEvent, DeviceMessage };
 use crate::storage::DataSink;
@@ -34,6 +34,9 @@ impl ConnectionReport {
 /// get something that is.
 pub struct Daq {
     pub info: DaqInfo,
+    /// Which format this setup records in. Carried so it survives a round trip
+    /// through `config()`; attaching the matching sink is `Project`'s job.
+    pub storage: StorageFormat,
     pub devices: Vec<Device>,
     pub sink: Option<Box<dyn DataSink>>,
 }
@@ -47,7 +50,9 @@ impl Daq {
         for device_config in config.devices.into_iter() {
             devices.push(Device::from_config(device_config)?);
         }
-        Daq::new(config.info.name, config.info.author, devices)
+        let mut daq = Daq::new(config.info.name, config.info.author, devices)?;
+        daq.storage = config.storage;
+        Ok(daq)
     }
 
     /// Describe this setup so it can be saved. Contains no measurement data,
@@ -55,6 +60,7 @@ impl Daq {
     pub fn config(&self) -> DaqConfig {
         DaqConfig {
             info: self.info.clone(),
+            storage: self.storage,
             devices: self.devices.iter().map(|device| device.config()).collect::<Vec<DeviceConfig>>(),
         }
     }
@@ -65,6 +71,7 @@ impl Daq {
                 name: name,
                 author: author,
             },
+            storage: StorageFormat::default(),
             devices: vec![],
             sink: None,
         };

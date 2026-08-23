@@ -11,4 +11,17 @@ pub mod session;
 pub mod storage;
 pub mod storage_csv;
 pub mod storage_sqlite;
+
+/// Build the system described by a project directory, ready to connect.
+///
+/// The short way in for a program embedding this library:
+///
+/// ```no_run
+/// let mut daq = lumberdaq::open("my_project")?;
+/// let report = daq.connect();
+/// # Ok::<(), lumberdaq::Error>(())
+/// ```
+pub fn open(directory: impl AsRef<std::path::Path>) -> Result<daq::Daq> {
+    project::Project::new(directory).open()
+}
 pub mod configuration;

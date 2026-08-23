@@ -3,6 +3,7 @@
     "name": "Example measurement",
     "author": "Joesephine Bloggs"
   },
+  "storage": "sqlite",
   "devices": [
     {
       "info": {

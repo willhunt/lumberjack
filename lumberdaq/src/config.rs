@@ -35,8 +35,26 @@ pub fn default_sample_interval_ms() -> u64 {
     100
 }
 
+/// Where a project records its results.
+///
+/// Part of the setup rather than something the caller chooses, so a project
+/// directory says what it is. Otherwise the same directory could be run two
+/// ways and end up with half the data in each format.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageFormat {
+    /// One file holding the setup and every run, queryable while recording.
+    #[default]
+    Sqlite,
+    /// Long format csv plus a json sidecar. Readable by anything, and a run
+    /// that dies halfway still leaves a usable file.
+    Csv,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DaqConfig {
     pub info: DaqInfo,
+    #[serde(default)]
+    pub storage: StorageFormat,
     pub devices: Vec<DeviceConfig>,
 }

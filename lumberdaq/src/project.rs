@@ -1,6 +1,10 @@
 use crate::Result;
-use crate::config::DaqConfig;
+use crate::config::{ DaqConfig, StorageFormat };
 use crate::configuration::{ read_configuration_file, write_configuration_file };
+use crate::daq::Daq;
+use crate::storage::DataSink;
+use crate::storage_csv::CsvSink;
+use crate::storage_sqlite::SqliteSink;
 use std::path::{ Path, PathBuf };
 
 /// A directory holding one measurement setup and the results recorded from it.
@@ -58,6 +62,34 @@ impl Project {
 
     pub fn read_config(&self) -> Result<DaqConfig> {
         read_configuration_file(&self.config_path())
+    }
+
+    /// Build the whole system this directory describes, ready to connect.
+    ///
+    /// This is the entry point for anything embedding lumberdaq: hand it a
+    /// directory and get back something that can record. Which storage format
+    /// to use comes from the config rather than the caller, so two programs
+    /// pointed at the same project cannot disagree about where the data goes.
+    ///
+    /// Connecting and running are left to the caller. A program wants to see
+    /// which devices failed before deciding whether the run is worth starting,
+    /// and wants events while it is going.
+    pub fn open(&self) -> Result<Daq> {
+        let config = self.read_config()?;
+        let storage = config.storage;
+        let mut daq = Daq::from_config(config)?;
+        daq.set_sink(self.sink(storage)?)?;
+        Ok(daq)
+    }
+
+    /// The sink this project records to, per its config.
+    pub fn sink(&self, format: StorageFormat) -> Result<Box<dyn DataSink>> {
+        Ok(match format {
+            StorageFormat::Sqlite => Box::new(SqliteSink::new(&self.database_path())?),
+            StorageFormat::Csv => {
+                Box::new(CsvSink::new(&self.results_path(), &self.header_path())?)
+            }
+        })
     }
 
     pub fn write_config(&self, config: &DaqConfig) -> Result<()> {
