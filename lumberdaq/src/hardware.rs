@@ -4,7 +4,7 @@ pub mod serial_stream;
 
 use crate::channel::ChannelInfo;
 use crate::datapoint::DataPoint;
-use crate::Result;
+use crate::{ Error, Result };
 use mock_hardware::{ MockHardware, MockHardwareConfig };
 use serial_stream:: { SerialStream, SerialStreamConfig };
 use crate::device::DeviceInterface;
@@ -79,7 +79,7 @@ impl HardwareDataAquisition for Hardware {
         match self {
             Hardware::MockHardware(device) => device.read(),
             Hardware::SerialStream(device) => device.read(),
-            Hardware::None => Err("No hardware is available for this device. Typically this type is used for reading data.".into())
+            Hardware::None => Err(Error::NoHardware)
         }
     }
 }
@@ -88,7 +88,7 @@ impl DeviceInterface for Hardware {
         match self {
             Hardware::MockHardware(device) => device.connect()?,
             Hardware::SerialStream(device) => device.connect()?,
-            Hardware::None => return Err("No hardware is available for this device. Typically this type is used for reading data.".into())
+            Hardware::None => return Err(Error::NoHardware)
         }
         Ok(())
     }

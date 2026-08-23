@@ -214,6 +214,6 @@ mod tests {
         let down = daq.disconnected();
         assert_eq!(down.len(), 1);
         assert_eq!(down[0].0, "Bad");
-        assert!(down[0].1.contains("No hardware"));
+        assert!(down[0].1.contains("hardware"));
     }
 }

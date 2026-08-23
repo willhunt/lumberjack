@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{ Error, Result };
 use crate::datapoint::DataPoint;
 use crate::channel::ChannelInfo;
 use crate::device::{ Device, DeviceInterface };
@@ -126,7 +126,7 @@ pub fn add_channel_random(device: &mut Device, name: String) -> Result<()> {
             });
         },
         _ => {
-            return Err("This channel can only be added to a Mock Hardware device.".into())
+            return Err(Error::WrongHardwareType { expected: "mock hardware".to_string() })
         }
     }
     // The hardware config is the definition; the device mirrors it.

@@ -36,6 +36,47 @@ pub enum Error {
     #[error(transparent)]
     ParseTimestamp(#[from] chrono::ParseError),
 
+    // ---- Hardware ----------------------------------------------------------
+    #[error("no hardware is configured for this device")]
+    NoHardware,
+
+    #[error("device on {port} is not connected")]
+    NotConnected { port: String },
+
+    #[error("cannot add a {expected} channel to this device")]
+    WrongHardwareType { expected: String },
+
+    // ---- Serial framing and parsing ----------------------------------------
+    #[error("frame pattern '{pattern}' for serial port {port} is not a valid regular expression")]
+    InvalidFramePattern {
+        pattern: String,
+        port: String,
+        #[source]
+        source: regex::Error,
+    },
+
+    #[error("{bytes} bytes arrived on {port} with no complete frame; check the baud rate and the frame pattern")]
+    NoFrameFound { port: String, bytes: usize },
+
+    #[error("channel '{channel}' reads index {index}, but the frame has only {fields} fields: '{frame}'")]
+    FrameTooShort {
+        channel: String,
+        index: i64,
+        fields: usize,
+        frame: String,
+    },
+
+    #[error("channel '{channel}' read '{field}' at index {index} of frame '{frame}', which is not a number")]
+    FieldNotNumeric {
+        channel: String,
+        index: i64,
+        field: String,
+        frame: String,
+    },
+
+    #[error("channel '{channel}' has a negative index {index}")]
+    NegativeChannelIndex { channel: String, index: i64 },
+
     // ---- Not yet converted -------------------------------------------------
     /// A failure that has not been given a variant of its own yet.
     ///
@@ -43,6 +84,31 @@ pub enum Error {
     /// shrink to nothing as each module gets its own variants.
     #[error("{0}")]
     Other(String),
+}
+
+impl Error {
+    /// Whether this means the device has gone away, rather than the data or the
+    /// configuration being wrong.
+    ///
+    /// This is the distinction the old string errors could not express. A
+    /// device that has genuinely dropped off should be reconnected; a frame
+    /// that failed to parse should not, because closing and reopening a healthy
+    /// port fixes nothing and loses whatever arrives meanwhile.
+    ///
+    /// Anything not listed here is treated as the device being fine, which is
+    /// the safer default: a spurious reconnect is worse than a reported error.
+    pub fn is_connection_lost(&self) -> bool {
+        match self {
+            Error::NotConnected { .. } => true,
+            Error::NoHardware => true,
+            // The port itself is unhappy: unplugged, or the OS handle is gone.
+            Error::Io(_) => true,
+            Error::SerialPort(_) => true,
+            // Framing, parsing and configuration problems. The device is there;
+            // what it sent, or what we asked for, is wrong.
+            _ => false,
+        }
+    }
 }
 
 // These two are why every existing `"...".into()` and `format!(...).into()`

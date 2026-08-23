@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{ Error, Result };
 use crate::datapoint::DataPoint;
 use crate::channel::ChannelInfo;
 use crate::device::{ Device, DeviceInterface };
@@ -94,10 +94,11 @@ impl SerialStream {
     /// rejected when the setup is built, rather than on the first read.
     pub fn from_config(config: SerialStreamConfig) -> Result<SerialStream> {
         let frame_pattern = Regex::new(&config.frame_pattern).map_err(|error| {
-            format!(
-                "Frame pattern '{}' for serial port {} is not a valid regular expression: {}",
-                config.frame_pattern, config.port, error
-            )
+            Error::InvalidFramePattern {
+                pattern: config.frame_pattern.clone(),
+                port: config.port.clone(),
+                source: error,
+            }
         })?;
         Ok(SerialStream {
             config: config,
@@ -166,19 +167,22 @@ fn parse_frame(
 
     for channel in channels.iter() {
         let position = usize::try_from(channel.index).map_err(|_| {
-            format!("Channel '{}' has a negative index {}.", channel.info.name, channel.index)
+            Error::NegativeChannelIndex {
+                channel: channel.info.name.clone(),
+                index: channel.index,
+            }
         })?;
-        let field = fields.get(position).ok_or_else(|| {
-            format!(
-                "Channel '{}' reads index {}, but the frame has only {} fields: '{}'",
-                channel.info.name, channel.index, fields.len(), frame
-            )
+        let field = fields.get(position).ok_or_else(|| Error::FrameTooShort {
+            channel: channel.info.name.clone(),
+            index: channel.index,
+            fields: fields.len(),
+            frame: frame.to_string(),
         })?;
-        let value: f64 = field.parse().map_err(|_| {
-            format!(
-                "Could not read a number for channel '{}' at index {} of frame '{}'. The field was '{}'.",
-                channel.info.name, channel.index, frame, field
-            )
+        let value: f64 = field.parse().map_err(|_| Error::FieldNotNumeric {
+            channel: channel.info.name.clone(),
+            index: channel.index,
+            field: field.to_string(),
+            frame: frame.to_string(),
         })?;
         readings.push(vec![DataPoint { datetime: timestamp, value: value }]);
     }
@@ -192,7 +196,7 @@ impl HardwareDataAquisition for SerialStream {
     fn read(&mut self) -> Result<Vec<Vec<DataPoint>>> {
         let port = match &mut self.serial_port {
             Some(port) => port,
-            None => return Err("Serial device is not connected.".into()),
+            None => return Err(Error::NotConnected { port: self.config.port.clone() }),
         };
 
         // Take only what has already arrived. Asking first means we never block
@@ -206,8 +210,9 @@ impl HardwareDataAquisition for SerialStream {
         }
 
         if self.buffer.len() > MAX_BUFFER_BYTES {
+            let bytes = self.buffer.len();
             self.buffer.clear();
-            return Err("Serial buffer filled with no complete frame; discarding it.".into());
+            return Err(Error::NoFrameFound { port: self.config.port.clone(), bytes: bytes });
         }
 
         match take_latest_frame(&mut self.buffer, &self.frame_pattern) {
@@ -237,7 +242,7 @@ pub fn add_channel(device: &mut Device, name: String, description: String, index
             });
         },
         _ => {
-            return Err("This channel can only be added to a serial stream device.".into())
+            return Err(Error::WrongHardwareType { expected: "serial stream".to_string() })
         }
     }
     // The hardware config is the definition; the device mirrors it.

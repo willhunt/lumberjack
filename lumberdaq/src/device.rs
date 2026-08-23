@@ -181,7 +181,12 @@ impl Device {
                 Ok(())
             }
             Err(error) => {
-                self.mark_disconnected(error.to_string());
+                // Only stand the device down if it has actually gone away. A
+                // frame that failed to parse leaves a perfectly good port open,
+                // and reconnecting it would lose data for nothing.
+                if error.is_connection_lost() {
+                    self.mark_disconnected(error.to_string());
+                }
                 Err(error)
             }
         }
@@ -242,9 +247,36 @@ mod tests {
         // Hardware::None always refuses to connect, which is enough to check
         // that the failure is stored rather than only returned.
         let mut device = Device::new("Test".to_string(), "-".to_string(), Hardware::None);
-        assert!(device.connect().is_err());
+        // Matching the variant rather than the message: the whole point of a
+        // typed error is that callers stop parsing prose.
+        let error = device.connect().err().unwrap();
+        assert!(matches!(error, crate::Error::NoHardware));
         assert!(!device.is_connected());
-        assert!(device.disconnected_reason().unwrap().contains("No hardware"));
+        assert!(device.disconnected_reason().is_some());
+    }
+
+    #[test]
+    fn a_bad_frame_does_not_stand_the_device_down() {
+        // A parse failure means the data was wrong, not that the port died, so
+        // the device must stay connected rather than being reconnected.
+        let error = crate::Error::FieldNotNumeric {
+            channel: "Pressure".to_string(),
+            index: 5,
+            field: "STBY".to_string(),
+            frame: "1,2.00,0,1,1,STBY".to_string(),
+        };
+        assert!(!error.is_connection_lost());
+    }
+
+    #[test]
+    fn losing_the_port_does_stand_the_device_down() {
+        let error = crate::Error::NotConnected { port: "COM3".to_string() };
+        assert!(error.is_connection_lost());
+        let unplugged = crate::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "device disconnected",
+        ));
+        assert!(unplugged.is_connection_lost());
     }
 
     #[test]
