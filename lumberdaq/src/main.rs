@@ -1,6 +1,7 @@
 use lumberdaq::configuration::write_configuration_file;
 use lumberdaq::daq::Daq;
 use lumberdaq::hardware::mock_hardware;
+use lumberdaq::storage_csv::CsvSink;
 use lumberdaq::Result;
 use std::{thread, time};
 
@@ -31,8 +32,10 @@ fn main() -> Result<()> {
         storage_path,
     )?;
 
-    // Setup storage
-    daq.init_storage()
+    // Setup storage. Swapping csv for another format is a change to this line
+    // only; nothing downstream of here knows the format.
+    let sink = CsvSink::new(&daq.csv_path.clone(), &daq.json_path.clone())?;
+    daq.set_sink(Box::new(sink))
         .unwrap_or_else(|err| panic!("Error intitialising storage: {err}"));
     // Connect to devices
     daq.connect()?;
@@ -42,11 +45,12 @@ fn main() -> Result<()> {
         for device in daq.devices.iter_mut() {
             device.read()?;
             device.print_latest();
-            match &mut daq.csv_writer {
-                Some(wtr) => device.write(wtr)?,
-                None => (),
-            }
         }
+        // Drain what was read into storage, then make it durable. Flushing once
+        // per cycle rather than once per datapoint is what keeps the syscall
+        // count sane at higher sample rates.
+        daq.write()?;
+        daq.flush()?;
         // Wait
         thread::sleep(time::Duration::from_millis(200));
     }

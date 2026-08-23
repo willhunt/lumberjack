@@ -5,5 +5,6 @@ pub mod datapoint;
 pub mod channel;
 pub mod device;
 pub mod daq;
+pub mod storage;
 pub mod storage_csv;
 pub mod configuration;

@@ -1,16 +1,17 @@
-use crate::channel::{ ChannelInfo, Channel };
-use crate::daq::{ Daq, DaqInfo };
+use crate::channel::Channel;
+use crate::daq::Daq;
 use crate::datapoint::DataPoint;
-use crate::device::{ Device, DeviceInfo, ConnectionStatus };
+use crate::device::{ Device, ConnectionStatus };
 use crate::hardware::Hardware;
+use crate::storage::{ Batch, DaqHeader, DataSink };
 use crate::Result;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::{ ErrorKind, Read, Write };
 use std::fs::File;
+use std::path::{ Path, PathBuf };
 use chrono::{ DateTime, Utc };
 use serde_json::to_string_pretty;
-use serde::{ Deserialize, Serialize };
 
 /// The strategy for storing data as it is being recorded is to use a csv file
 /// Through testing this is much faster than saving a SQLite data base to disk
@@ -19,17 +20,6 @@ use serde::{ Deserialize, Serialize };
 /// To maintain a typical format for the csv file a json will be used to store
 /// any additional information about the test or setup.
 
-
-#[derive(Serialize, Deserialize)]
-pub struct DeviceHeader {
-    pub info: DeviceInfo,
-    pub channels: Vec<ChannelInfo>,
-}
-#[derive(Serialize, Deserialize)]
-pub struct DaqHeader {
-    pub info: DaqInfo,
-    pub devices: Vec<DeviceHeader>,
-}
 
 pub fn check_file_extension(path: &std::path::PathBuf, extension: &OsStr) -> Result<()> {
     if path.extension() != Some(extension) {
@@ -43,21 +33,14 @@ pub fn check_file_extension(path: &std::path::PathBuf, extension: &OsStr) -> Res
 }
 
 pub fn write_json_file(path: &std::path::PathBuf, daq: &Daq) -> Result<()> {
-    check_file_extension(path, OsStr::new("json"))?;
-    let header = DaqHeader{
-        info: daq.info.clone(),
-        devices: daq.devices.iter().map(|device|
-            DeviceHeader {
-                info: device.info.clone(),
-                channels: device.channels.iter().map(|channel| channel.info.clone()).collect(),
-            }
-        ).collect(),
-    };
-    // serde_json::to_writer(writer, value);
+    let header = DaqHeader::from_daq(daq);
+    write_json_header(path, &header)
+}
 
+pub fn write_json_header(path: &Path, header: &DaqHeader) -> Result<()> {
+    check_file_extension(&path.to_path_buf(), OsStr::new("json"))?;
     let mut file = File::create(path)?;
-    // file.write_all(header_json.to_string().as_bytes())?;
-    file.write_all(to_string_pretty(&header)?.as_bytes())?;
+    file.write_all(to_string_pretty(header)?.as_bytes())?;
     return Ok(());
 }
 
@@ -81,6 +64,55 @@ pub fn write_csv_record(wtr: &mut csv::Writer<std::fs::File>, device_name: &str,
     wtr.write_record(&[device_name, channel_name, &timestamp.to_string(), &value.to_string()])?;
     wtr.flush()?;
     return Ok(());
+}
+
+/// Streams acquired data to a csv file, with a json sidecar holding the header.
+///
+/// The csv is long format: one row per datapoint, repeating the device and
+/// channel name on every row. That is verbose on disk, but it is append-only
+/// and line oriented, so a run that dies halfway still leaves a file that reads.
+pub struct CsvSink {
+    writer: csv::Writer<File>,
+    json_path: PathBuf,
+}
+
+impl CsvSink {
+    pub fn new(csv_path: &Path, json_path: &Path) -> Result<CsvSink> {
+        check_file_extension(&csv_path.to_path_buf(), OsStr::new("csv"))?;
+        check_file_extension(&json_path.to_path_buf(), OsStr::new("json"))?;
+        Ok(CsvSink {
+            writer: csv::Writer::from_path(csv_path)?,
+            json_path: json_path.to_path_buf(),
+        })
+    }
+}
+
+impl DataSink for CsvSink {
+    fn init(&mut self, header: &DaqHeader) -> Result<()> {
+        write_json_header(&self.json_path, header)?;
+        self.writer.write_record(&["Device", "Channel", "Timestamp", "Value"])?;
+        self.flush()
+    }
+
+    fn write_batch(&mut self, batch: &Batch) -> Result<()> {
+        // No flush per row: csv::Writer buffers, and flushing every datapoint
+        // costs a syscall per sample. The caller decides how often to flush,
+        // which is what bounds how much data a crash can lose.
+        for datapoint in batch.datapoints.iter() {
+            self.writer.write_record(&[
+                &batch.device,
+                &batch.channel,
+                &datapoint.datetime.to_string(),
+                &datapoint.value.to_string(),
+            ])?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.writer.flush()?;
+        Ok(())
+    }
 }
 
 pub fn read_csv_file(path: &std::path::PathBuf) -> Result<HashMap<String, HashMap<String, Vec<DataPoint>>>> {
@@ -147,7 +179,7 @@ pub fn read_results(csv_path: &std::path::PathBuf, json_path: &std::path::PathBu
         devices: devices,
         json_path: json_path.clone(),
         csv_path: csv_path.clone(),
-        csv_writer: None,
+        sink: None,
     };
     return Ok(daq);
 }

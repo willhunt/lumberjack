@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::device::{ Device, DeviceInterface };
-use crate::storage_csv::{ write_csv_file, write_json_file };
+use crate::storage::{ DaqHeader, DataSink };
 use serde::{ Deserialize, Serialize };
 
 #[derive(Serialize, Deserialize, Clone)] // csv_writer connot be cloned
@@ -9,14 +9,14 @@ pub struct DaqInfo {
     pub author: String,
 }
 
-#[derive(Serialize, Deserialize)] // csv_writer connot be cloned
+#[derive(Serialize, Deserialize)] // a live sink cannot be cloned or serialized
 pub struct Daq {
     pub info: DaqInfo,
     pub devices: Vec<Device>,
     pub json_path: std::path::PathBuf,
     pub csv_path: std::path::PathBuf,
     #[serde(skip)]
-    pub csv_writer: Option<csv::Writer<std::fs::File>>,
+    pub sink: Option<Box<dyn DataSink>>,
 }
 impl Daq {
     pub fn new(name: String, author: String, devices: Vec<Device>, storage_path: std::path::PathBuf) -> Result<Daq> {
@@ -28,7 +28,7 @@ impl Daq {
             devices: vec![],
             json_path: storage_path.clone().with_extension("json"),
             csv_path: storage_path,
-            csv_writer: None,
+            sink: None,
         };
         // daq.add_device(devices.pop().unwrap());
         for device in devices.into_iter() {
@@ -54,10 +54,34 @@ impl Daq {
         Ok(())
     }
 
-    pub fn init_storage(&mut self) -> Result<()> {
-        write_json_file(&self.json_path, self)?;
-        self.csv_writer = Some(write_csv_file(&self.csv_path)?);
-        
-        return Ok(());
+    /// Attach somewhere to record to, and write the header describing this test.
+    ///
+    /// Daq does not know or care which format that is.
+    pub fn set_sink(&mut self, mut sink: Box<dyn DataSink>) -> Result<()> {
+        sink.init(&DaqHeader::from_daq(self))?;
+        self.sink = Some(sink);
+        Ok(())
+    }
+
+    /// Drain every device's acquired data into the sink. Does nothing if no
+    /// sink is attached, so acquisition without recording is not an error.
+    pub fn write(&mut self) -> Result<()> {
+        let sink = match &mut self.sink {
+            Some(sink) => sink,
+            None => return Ok(()),
+        };
+        for device in self.devices.iter_mut() {
+            device.write(sink.as_mut())?;
+        }
+        Ok(())
+    }
+
+    /// Push buffered data out to disk. How often this is called is what bounds
+    /// how much a crash can lose.
+    pub fn flush(&mut self) -> Result<()> {
+        if let Some(sink) = &mut self.sink {
+            sink.flush()?;
+        }
+        Ok(())
     }
 }

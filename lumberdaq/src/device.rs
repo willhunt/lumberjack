@@ -1,6 +1,7 @@
 use crate::Result;
 use crate::channel::Channel;
 use crate::hardware::{ Hardware, HardwareDataAquisition };
+use crate::storage::DataSink;
 use serde::{Deserialize, Serialize};
 
 pub trait DeviceInterface {
@@ -77,9 +78,10 @@ impl Device {
         Ok(())
     }
 
-    pub fn write(&mut self, wtr: &mut csv::Writer<std::fs::File>) -> Result<()>{
-        for channel in &mut self.channels {
-            channel.write(wtr, &self.info.name)?;
+    pub fn write(&mut self, sink: &mut dyn DataSink) -> Result<()>{
+        for channel in self.channels.iter_mut() {
+            let batch = channel.drain_batch(&self.info.name);
+            sink.write_batch(&batch)?;
         }
         Ok(())
     }

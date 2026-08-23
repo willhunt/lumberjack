@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::datapoint::DataPoint;
-use crate::storage_csv::write_csv_record;
+use crate::storage::Batch;
 use chrono;
 use serde::{Deserialize, Serialize};
 
@@ -55,18 +55,16 @@ impl Channel {
         }
     }
 
-    pub fn write(&mut self, wtr: &mut csv::Writer<std::fs::File>, device_name: &str) -> Result<()> {
-        for datapoint in self.datapoints.iter() {
-            write_csv_record(
-                wtr,
-                device_name,
-                &self.info.name,
-                datapoint.datetime,
-                datapoint.value
-            )?;
+    /// Hand off everything acquired so far, leaving the channel's buffer empty.
+    ///
+    /// `mem::take` swaps in an empty Vec and returns the old one, so the
+    /// datapoints move into the batch rather than being copied.
+    pub fn drain_batch(&mut self, device_name: &str) -> Batch {
+        Batch {
+            device: device_name.to_string(),
+            channel: self.info.name.clone(),
+            datapoints: std::mem::take(&mut self.datapoints),
         }
-        self.datapoints = vec![];
-        Ok(())
     }
 
     pub fn datapoints_as_vectors(&self) -> Result<(Vec<chrono::DateTime<chrono::Utc>>, Vec<f64>)> {
