@@ -81,20 +81,32 @@ impl Device {
             hardware: Hardware::from_config(config.hardware)?,
             connection: ConnectionStatus::default(),
         };
-        for info in config.channels.into_iter() {
-            device.add_channel(Channel::from_info(info))?;
-        }
+        device.rebuild_channels()?;
         Ok(device)
     }
 
-    /// Describe this device so it can be saved. The channel list is projected
-    /// from the live channels rather than stored twice.
+    /// Describe this device so it can be saved.
+    ///
+    /// The channels are not listed here; they live in the hardware config,
+    /// which is the one place they are defined.
     pub fn config(&self) -> DeviceConfig {
         DeviceConfig {
             info: self.info.clone(),
-            channels: self.channels.iter().map(|channel| channel.info.clone()).collect(),
             hardware: self.hardware.config(),
         }
+    }
+
+    /// Mirror the hardware's channel definitions onto this device.
+    ///
+    /// The hardware config decides which channels exist and in what order;
+    /// this builds the matching buffers. Discards any data already collected,
+    /// so it belongs to setting a device up, not to running it.
+    pub fn rebuild_channels(&mut self) -> Result<()> {
+        self.channels = vec![];
+        for info in self.hardware.config().channel_infos().into_iter() {
+            self.add_channel(Channel::from_info(info))?;
+        }
+        Ok(())
     }
 
     pub fn new(name: String, description: String, hardware: Hardware) -> Device {

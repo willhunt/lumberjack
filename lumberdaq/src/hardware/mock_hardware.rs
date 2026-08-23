@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::datapoint::DataPoint;
-use crate::channel::{ Channel, ChannelDataAquisition };
+use crate::channel::{ ChannelInfo, ChannelDataAquisition };
 use crate::device::{ Device, DeviceInterface };
 use crate::hardware::{HardwareDataAquisition, Hardware };
 use serde::{Deserialize, Serialize};
@@ -11,14 +11,25 @@ use rand::random;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MockHardwareConfig {
     pub description: String,
-    pub inputs: Vec<MockHardwareInput>,
+    pub channels: Vec<MockHardwareChannel>,
+}
+
+/// One channel: what it is, and what generates its values.
+///
+/// Description and binding live together so they cannot be listed in different
+/// orders, which is what used to decide silently whose data went where.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct MockHardwareChannel {
+    #[serde(flatten)]
+    pub info: ChannelInfo,
+    pub input: MockHardwareInput,
 }
 
 impl Default for MockHardwareConfig {
     fn default() -> MockHardwareConfig {
         MockHardwareConfig {
             description: "This is a mock device that uses no hardware. It is used for testing and development purposes.".to_string(),
-            inputs: vec![],
+            channels: vec![],
         }
     }
 }
@@ -42,8 +53,8 @@ impl MockHardware {
         self.config.clone()
     }
 
-    pub fn add_input(&mut self, input: MockHardwareInput) {
-        self.config.inputs.push(input);
+    pub fn add_channel(&mut self, channel: MockHardwareChannel) {
+        self.config.channels.push(channel);
     }
 }
 
@@ -57,8 +68,8 @@ impl DeviceInterface for MockHardware {
 impl HardwareDataAquisition for MockHardware {
     fn read(&mut self) -> Result<Vec<Vec<DataPoint>>> {
         let mut readings: Vec<Vec<DataPoint>> = vec![];
-        for input in self.config.inputs.iter_mut() {
-            let datapoints = input.read()?;
+        for channel in self.config.channels.iter_mut() {
+            let datapoints = channel.input.read()?;
             readings.push(datapoints);
         }
         Ok(readings)
@@ -95,17 +106,23 @@ pub fn create_device(name: String, description: String) -> Result<Device> {
 }
 
 pub fn add_channel_random(device: &mut Device, name: String) -> Result<()> {
+    let id = format!("c{}", device.channels.len());
     match &mut device.hardware {
         Hardware::MockHardware(hardware) => {
-            hardware.add_input(MockHardwareInput::Random);
+            hardware.add_channel(MockHardwareChannel {
+                info: ChannelInfo {
+                    id: id,
+                    name: name,
+                    unit: "-".to_string(),
+                    description: "Random number generator".to_string(),
+                },
+                input: MockHardwareInput::Random,
+            });
         },
         _ => {
             return Err("This channel can only be added to a Mock Hardware device.".into())
         }
     }
-    let n = device.channels.len();
-    let id = format!("c{}", n);
-    let channel = Channel::new(id, name, "-".to_string(), "Random number generator".to_string());
-    device.add_channel(channel)?;
-    Ok(())
+    // The hardware config is the definition; the device mirrors it.
+    device.rebuild_channels()
 }

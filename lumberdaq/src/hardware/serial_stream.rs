@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::datapoint::DataPoint;
-use crate::channel::{ Channel, ChannelDataAquisition };
+use crate::channel::ChannelInfo;
 use crate::device::{ Device, DeviceInterface };
 use crate::hardware::{HardwareDataAquisition, Hardware };
 use serde::{ Deserialize, Serialize };
@@ -34,7 +34,21 @@ pub struct SerialStreamConfig {
     /// will happily match a partial frame and hand back truncated data.
     #[serde(default = "default_frame_pattern")]
     pub frame_pattern: String,
-    pub inputs: Vec<SerialStreamInput>,
+    pub channels: Vec<SerialStreamChannel>,
+}
+
+/// One channel: what it is, and where to find it in the frame.
+///
+/// Description and binding live together deliberately. When they were two
+/// parallel lists, matched by position, a config that listed them in different
+/// orders would quietly record each channel's data under another's name.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SerialStreamChannel {
+    #[serde(flatten)]
+    pub info: ChannelInfo,
+    /// Which comma separated field of the frame this channel reads, counting
+    /// from zero.
+    pub index: i64,
 }
 
 /// Matches the `#...$` framing described above. Used when a config does not
@@ -72,7 +86,7 @@ impl SerialStream {
             port: port,
             baudrate: baudrate,
             frame_pattern: default_frame_pattern(),
-            inputs: vec![],
+            channels: vec![],
         })
     }
 
@@ -97,8 +111,8 @@ impl SerialStream {
         self.config.clone()
     }
 
-    pub fn add_input(&mut self, input: SerialStreamInput) {
-        self.config.inputs.push(input);
+    pub fn add_channel(&mut self, channel: SerialStreamChannel) {
+        self.config.channels.push(channel);
     }
 }
 
@@ -139,37 +153,34 @@ fn take_latest_frame(buffer: &mut String, pattern: &Regex) -> Option<String> {
 
 /// Split one frame into a reading per configured channel.
 ///
-/// The returned Vec is in the same order as `inputs`, because `Device::read`
-/// zips it against its channels positionally.
+/// The returned Vec is in the same order as `channels`, because `Device::read`
+/// pairs it against the device's channels positionally. Both come from this one
+/// list, so they cannot fall out of step.
 fn parse_frame(
     frame: &str,
-    inputs: &[SerialStreamInput],
+    channels: &[SerialStreamChannel],
     timestamp: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<Vec<DataPoint>>> {
     let fields: Vec<&str> = frame.split(FIELD_SEPARATOR).map(|field| field.trim()).collect();
-    let mut readings: Vec<Vec<DataPoint>> = Vec::with_capacity(inputs.len());
+    let mut readings: Vec<Vec<DataPoint>> = Vec::with_capacity(channels.len());
 
-    for input in inputs.iter() {
-        match input {
-            SerialStreamInput::LineInput { index } => {
-                let position = usize::try_from(*index).map_err(|_| {
-                    format!("Channel index {} is negative.", index)
-                })?;
-                let field = fields.get(position).ok_or_else(|| {
-                    format!(
-                        "A channel is configured to read index {}, but the frame has only {} fields: '{}'",
-                        index, fields.len(), frame
-                    )
-                })?;
-                let value: f64 = field.parse().map_err(|_| {
-                    format!(
-                        "Could not read a number from index {} of frame '{}'. The field was '{}'.",
-                        index, frame, field
-                    )
-                })?;
-                readings.push(vec![DataPoint { datetime: timestamp, value: value }]);
-            }
-        }
+    for channel in channels.iter() {
+        let position = usize::try_from(channel.index).map_err(|_| {
+            format!("Channel '{}' has a negative index {}.", channel.info.name, channel.index)
+        })?;
+        let field = fields.get(position).ok_or_else(|| {
+            format!(
+                "Channel '{}' reads index {}, but the frame has only {} fields: '{}'",
+                channel.info.name, channel.index, fields.len(), frame
+            )
+        })?;
+        let value: f64 = field.parse().map_err(|_| {
+            format!(
+                "Could not read a number for channel '{}' at index {} of frame '{}'. The field was '{}'.",
+                channel.info.name, channel.index, frame, field
+            )
+        })?;
+        readings.push(vec![DataPoint { datetime: timestamp, value: value }]);
     }
     Ok(readings)
 }
@@ -202,22 +213,7 @@ impl HardwareDataAquisition for SerialStream {
         match take_latest_frame(&mut self.buffer, &self.frame_pattern) {
             // Nothing complete yet: we are sampling faster than the device sends.
             None => Ok(vec![]),
-            Some(frame) => parse_frame(&frame, &self.config.inputs, chrono::Utc::now()),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub enum SerialStreamInput {
-    LineInput { index: i64 },
-}
-impl ChannelDataAquisition for SerialStreamInput {
-    /// All channels must be read together in the device read method, so this is not implemented for the individual channel.
-    fn read(&mut self) -> Result<Vec<DataPoint>> {
-        match self {
-            SerialStreamInput::LineInput {index: _} => {
-                Err("Channels for this device must be read all together by the device read method.".into())
-            },
+            Some(frame) => parse_frame(&frame, &self.config.channels, chrono::Utc::now()),
         }
     }
 }
@@ -230,21 +226,22 @@ pub fn create_device(name: String, description: String, port: String, baudrate: 
 pub fn add_channel(device: &mut Device, name: String, description: String, index: i64, unit: String) -> Result<()> {
     match &mut device.hardware {
         Hardware::SerialStream(hardware) => {
-            hardware.add_input(SerialStreamInput::LineInput { index: index });
+            hardware.add_channel(SerialStreamChannel {
+                info: ChannelInfo {
+                    id: index.to_string(),
+                    name: name,
+                    unit: unit,
+                    description: description,
+                },
+                index: index,
+            });
         },
         _ => {
             return Err("This channel can only be added to a serial stream device.".into())
         }
     }
-
-    let channel = Channel::new(
-        index.to_string(),
-        name,
-        unit,
-        description,
-    );
-    device.add_channel(channel)?;
-    Ok(())
+    // The hardware config is the definition; the device mirrors it.
+    device.rebuild_channels()
 }
 
 #[cfg(test)]
@@ -254,8 +251,16 @@ mod tests {
     /// The example frame from the device documentation above.
     const EXAMPLE: &str = "1,2.00,0,1,1,STBY,0,1,0";
 
-    fn line_inputs(indices: &[i64]) -> Vec<SerialStreamInput> {
-        indices.iter().map(|index| SerialStreamInput::LineInput { index: *index }).collect()
+    fn line_inputs(indices: &[i64]) -> Vec<SerialStreamChannel> {
+        indices.iter().map(|index| SerialStreamChannel {
+            info: ChannelInfo {
+                id: index.to_string(),
+                name: format!("Channel {}", index),
+                unit: "-".to_string(),
+                description: "-".to_string(),
+            },
+            index: *index,
+        }).collect()
     }
 
     #[test]
@@ -354,10 +359,35 @@ mod tests {
             "description": "Older config",
             "port": "COM3",
             "baudrate": 115200,
-            "inputs": []
+            "channels": []
         }"#;
         let config: SerialStreamConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.frame_pattern, default_frame_pattern());
+    }
+
+    /// A channel reads as one flat object: what it is, and where it comes from.
+    #[test]
+    fn a_channel_carries_its_description_and_its_binding_together() {
+        let json = r#"{
+            "id": "1",
+            "name": "Pressure",
+            "unit": "Pa",
+            "description": "Differential pressure sensor",
+            "index": 1
+        }"#;
+        let channel: SerialStreamChannel = serde_json::from_str(json).unwrap();
+        assert_eq!(channel.info.name, "Pressure");
+        assert_eq!(channel.index, 1);
+    }
+
+    /// The failure the merge exists to prevent: reordering used to swap which
+    /// channel each value landed in. Now the name travels with the index.
+    #[test]
+    fn reordering_channels_moves_their_bindings_with_them() {
+        let forwards = parse_frame(EXAMPLE, &line_inputs(&[1, 3]), chrono::Utc::now()).unwrap();
+        let backwards = parse_frame(EXAMPLE, &line_inputs(&[3, 1]), chrono::Utc::now()).unwrap();
+        assert_eq!(forwards[0][0].value, backwards[1][0].value);
+        assert_eq!(forwards[1][0].value, backwards[0][0].value);
     }
 
     #[test]
@@ -367,7 +397,7 @@ mod tests {
             port: "COM1".to_string(),
             baudrate: 9600,
             frame_pattern: r"#([$".to_string(),
-            inputs: vec![],
+            channels: vec![],
         };
         let error = SerialStream::from_config(config).err().unwrap();
         assert!(error.to_string().contains("not a valid regular expression"));

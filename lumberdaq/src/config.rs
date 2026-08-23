@@ -1,4 +1,3 @@
-use crate::channel::ChannelInfo;
 use crate::daq::DaqInfo;
 use crate::device::DeviceInfo;
 use crate::hardware::HardwareConfig;
@@ -13,10 +12,13 @@ use serde::{ Deserialize, Serialize };
 /// `DeviceInfo` appearing here and in `Device` is not two copies of the same
 /// state - at runtime only the `Device` exists.
 
+/// Note there is no channel list here. Channels are defined inside the hardware
+/// config, alongside the binding that says where each one's data comes from.
+/// Keeping them apart meant two lists matched by position, which a hand edited
+/// config could silently put out of order.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DeviceConfig {
     pub info: DeviceInfo,
-    pub channels: Vec<ChannelInfo>,
     pub hardware: HardwareConfig,
 }
 

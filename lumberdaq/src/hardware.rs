@@ -2,10 +2,11 @@
 pub mod mock_hardware;
 pub mod serial_stream;
 
+use crate::channel::ChannelInfo;
 use crate::datapoint::DataPoint;
 use crate::Result;
-use mock_hardware::{ MockHardware, MockHardwareConfig, MockHardwareInput };
-use serial_stream:: { SerialStream, SerialStreamConfig, SerialStreamInput };
+use mock_hardware::{ MockHardware, MockHardwareConfig };
+use serial_stream:: { SerialStream, SerialStreamConfig };
 use crate::device::DeviceInterface;
 use serde::{ Deserialize, Serialize };
 
@@ -24,6 +25,25 @@ pub enum HardwareConfig {
     MockHardware(MockHardwareConfig),
     SerialStream(SerialStreamConfig),
     None,
+}
+
+impl HardwareConfig {
+    /// The channels this hardware provides, in the order it reads them.
+    ///
+    /// The hardware config is the single definition of which channels exist.
+    /// A device mirrors this list rather than keeping its own, so the two
+    /// cannot disagree about what is being measured or in what order.
+    pub fn channel_infos(&self) -> Vec<ChannelInfo> {
+        match self {
+            HardwareConfig::MockHardware(config) => {
+                config.channels.iter().map(|channel| channel.info.clone()).collect()
+            }
+            HardwareConfig::SerialStream(config) => {
+                config.channels.iter().map(|channel| channel.info.clone()).collect()
+            }
+            HardwareConfig::None => vec![],
+        }
+    }
 }
 
 /// A piece of hardware as it exists while running, owning whatever resources
@@ -72,10 +92,4 @@ impl DeviceInterface for Hardware {
         }
         Ok(())
     }
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum Input {
-    MockHardware(MockHardwareInput),
-    SerialStreamInput(SerialStreamInput),
 }
