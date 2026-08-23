@@ -9,7 +9,9 @@ Repo layout:
 
 - `lumberdaq/` — **the current focus.** Standalone Rust library + binary. Must work
   independently of any GUI.
-- `src-tauri/`, `src/` — an earlier Tauri + Svelte prototype. **Legacy.** Do not extend it
+- `app/` — an earlier Tauri + Svelte prototype (`app/src-tauri/` plus the Svelte
+  frontend). **Legacy.** It does not depend on lumberdaq at all — it carries its own
+  serial handling. On Tauri 1.2.4, so a rewrite against lumberdaq is a migration too. Do not extend it
   or copy patterns from it unless I ask. It's kept for reference on what the UI eventually
   needs.
 
@@ -160,7 +162,7 @@ loop can run with no hardware attached at all — keep it working.
 
 ## Things not to do
 
-- Don't touch `src-tauri/` or the Svelte frontend unless asked.
+- Don't touch `app/` (the Tauri prototype and Svelte frontend) unless asked.
 - Don't add async, a new runtime, or a new architectural layer without discussing it first.
 - Don't produce a large "here's the whole feature" patch. It defeats the point.
 - Don't tell me code works if you haven't run it. Say what you actually verified.
