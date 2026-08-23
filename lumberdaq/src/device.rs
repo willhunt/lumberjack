@@ -1,8 +1,8 @@
 use crate::{ Error, Result };
 use crate::channel::Channel;
-use crate::config::DeviceConfig;
+use crate::config::{ default_sample_interval_ms, DeviceConfig };
 use crate::hardware::{ Hardware, HardwareDataAquisition };
-use crate::storage::DataSink;
+use crate::storage::{ Batch, DataSink };
 use serde::{Deserialize, Serialize};
 use std::time::{ Duration, Instant };
 
@@ -59,6 +59,8 @@ fn retry_due(status: &ConnectionStatus) -> bool {
 /// asking it for its `DeviceConfig`.
 pub struct Device {
     pub info: DeviceInfo,
+    /// How often this device's thread reads it.
+    pub sample_interval: Duration,
     pub channels: Vec<Channel>,
     pub hardware: Hardware,
     pub connection: ConnectionStatus,
@@ -72,6 +74,7 @@ impl Device {
     pub fn from_config(config: DeviceConfig) -> Result<Device> {
         let mut device = Device {
             info: config.info,
+            sample_interval: Duration::from_millis(config.sample_interval_ms),
             channels: vec![],
             hardware: Hardware::from_config(config.hardware)?,
             connection: ConnectionStatus::default(),
@@ -87,6 +90,7 @@ impl Device {
     pub fn config(&self) -> DeviceConfig {
         DeviceConfig {
             info: self.info.clone(),
+            sample_interval_ms: self.sample_interval.as_millis() as u64,
             hardware: self.hardware.config(),
         }
     }
@@ -109,7 +113,8 @@ impl Device {
             info: DeviceInfo {
                 name: name,
                 description: description,
-            },            
+            },
+            sample_interval: Duration::from_millis(default_sample_interval_ms()),
             channels: vec![],
             hardware: hardware,
             connection: ConnectionStatus::default(),
@@ -207,9 +212,18 @@ impl Device {
         }
     }
 
-    pub fn write(&mut self, sink: &mut dyn DataSink) -> Result<()>{
+    /// Hand over everything acquired since the last call, one batch per channel.
+    pub fn drain_batches(&mut self) -> Vec<Batch> {
+        let device_name = &self.info.name;
+        let mut batches = Vec::with_capacity(self.channels.len());
         for channel in self.channels.iter_mut() {
-            let batch = channel.drain_batch(&self.info.name);
+            batches.push(channel.drain_batch(device_name));
+        }
+        batches
+    }
+
+    pub fn write(&mut self, sink: &mut dyn DataSink) -> Result<()>{
+        for batch in self.drain_batches() {
             sink.write_batch(&batch)?;
         }
         Ok(())
@@ -220,6 +234,14 @@ impl Device {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each device gets its own thread, so a Device must be movable into one.
+    /// This fails to compile if a field ever stops being Send.
+    #[test]
+    fn a_device_can_move_to_its_own_thread() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Device>();
+    }
 
     fn failed_at(when: Instant) -> ConnectionStatus {
         ConnectionStatus::Disconnected {

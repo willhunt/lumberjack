@@ -1,8 +1,13 @@
 use crate::{ Error, Result };
 use crate::config::{ DaqConfig, DeviceConfig };
 use crate::device::Device;
+use crate::session::{ run_device, DeviceEvent, DeviceMessage };
 use crate::storage::DataSink;
 use serde::{ Deserialize, Serialize };
+use std::sync::atomic::{ AtomicBool, Ordering };
+use std::sync::mpsc;
+use std::thread;
+use std::time::{ Duration, Instant };
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DaqInfo {
@@ -170,6 +175,103 @@ impl Daq {
         }
         Ok(())
     }
+
+    /// Record from every device, each on its own thread, until `stop` is set.
+    ///
+    /// Blocks for the length of the run. A device that samples slowly no longer
+    /// holds up one that samples quickly, which is the point of the threads;
+    /// each keeps its own schedule from its `sample_interval`.
+    ///
+    /// These are scoped threads, so a thread borrows its device rather than
+    /// taking it. The Daq keeps its devices and they can be inspected again
+    /// afterwards, and nothing needs a lock: exclusive access falls out of the
+    /// borrow. The cost is that this call cannot return while a thread is still
+    /// running, which is what `stop` is for.
+    ///
+    /// While a run is in progress the devices cannot be read from here, so
+    /// anything worth knowing arrives through `on_event`.
+    pub fn run(
+        &mut self,
+        stop: &AtomicBool,
+        on_event: &mut dyn FnMut(DeviceEvent),
+    ) -> Result<()> {
+        // Split the borrow: the threads take the devices, this thread keeps the
+        // sink. Disjoint fields, so the compiler allows both at once.
+        let devices = &mut self.devices;
+        let sink = &mut self.sink;
+        let (sender, receiver) = mpsc::channel::<DeviceMessage>();
+
+        thread::scope(|scope| {
+            for device in devices.iter_mut() {
+                let sender = sender.clone();
+                scope.spawn(move || run_device(device, sender, stop));
+            }
+            // Drop this thread's copy, so the receive loop ends when the last
+            // device thread finishes rather than waiting for a sender forever.
+            drop(sender);
+
+            collect(receiver, sink, on_event)
+        })
+    }
+
+    /// Record for a fixed length of time.
+    pub fn run_for(
+        &mut self,
+        duration: Duration,
+        on_event: &mut dyn FnMut(DeviceEvent),
+    ) -> Result<()> {
+        let stop = AtomicBool::new(false);
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                thread::sleep(duration);
+                stop.store(true, Ordering::Relaxed);
+            });
+            self.run(&stop, on_event)
+        })
+    }
+}
+
+/// How long data may sit in the sink's buffer before being pushed to disk.
+///
+/// This is what bounds a crash, so it is a time rather than a message count: a
+/// fast device and a slow one lose the same amount.
+const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Take what the device threads send, write it, and pass on anything the caller
+/// should hear about.
+fn collect(
+    receiver: mpsc::Receiver<DeviceMessage>,
+    sink: &mut Option<Box<dyn DataSink>>,
+    on_event: &mut dyn FnMut(DeviceEvent),
+) -> Result<()> {
+    let mut last_flush = Instant::now();
+    loop {
+        // Waiting with a timeout rather than blocking means an idle rig still
+        // flushes on schedule instead of holding data until something arrives.
+        match receiver.recv_timeout(FLUSH_INTERVAL) {
+            Ok(DeviceMessage::Data(batch)) => {
+                if let Some(sink) = sink.as_mut() {
+                    sink.write_batch(&batch)?;
+                }
+            }
+            Ok(DeviceMessage::Event(event)) => on_event(event),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            // Every device thread has finished.
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+
+        if last_flush.elapsed() >= FLUSH_INTERVAL {
+            if let Some(sink) = sink.as_mut() {
+                sink.flush()?;
+            }
+            last_flush = Instant::now();
+        }
+    }
+
+    if let Some(sink) = sink.as_mut() {
+        sink.flush()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

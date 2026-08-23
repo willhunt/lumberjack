@@ -19,7 +19,20 @@ use serde::{ Deserialize, Serialize };
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DeviceConfig {
     pub info: DeviceInfo,
+    /// How often to read this device, in milliseconds.
+    ///
+    /// Per device rather than per system: a thermocouple logger sampling once a
+    /// second and a serial rig at 50Hz belong in the same test, and each gets
+    /// its own thread so neither waits for the other.
+    #[serde(default = "default_sample_interval_ms")]
+    pub sample_interval_ms: u64,
     pub hardware: HardwareConfig,
+}
+
+/// 10Hz, matching the serial device this was built against. Also the fallback
+/// for configs written before the setting existed.
+pub fn default_sample_interval_ms() -> u64 {
+    100
 }
 
 #[derive(Serialize, Deserialize, Clone)]

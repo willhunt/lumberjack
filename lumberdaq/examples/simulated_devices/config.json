@@ -9,6 +9,7 @@
         "name": "Test device",
         "description": "-"
       },
+      "sample_interval_ms": 500,
       "hardware": {
         "type": "MockHardware",
         "description": "This is a mock device that uses no hardware. It is used for testing and development purposes.",
@@ -27,6 +28,7 @@
         "name": "Serial test device",
         "description": "Device streaming over serial."
       },
+      "sample_interval_ms": 100,
       "hardware": {
         "type": "SerialStream",
         "description": "Device streaming over serial.",

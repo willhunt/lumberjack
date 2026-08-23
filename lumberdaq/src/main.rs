@@ -1,11 +1,12 @@
 use lumberdaq::daq::Daq;
 use lumberdaq::hardware::{ mock_hardware, serial_stream };
 use lumberdaq::project::Project;
+use lumberdaq::session::DeviceEvent;
 #[allow(unused_imports)]
 use lumberdaq::storage_csv::CsvSink;
 use lumberdaq::storage_sqlite::SqliteSink;
 use lumberdaq::Result;
-use std::{thread, time};
+use std::time;
 
 fn main() -> Result<()> {
     // Everything this run reads or writes lives under here.
@@ -38,6 +39,11 @@ fn main() -> Result<()> {
         3,
         "-".to_string(),
     )?;
+
+    // Each device reads at its own rate on its own thread, so a slow one no
+    // longer holds up a fast one.
+    mock_hardware.sample_interval = time::Duration::from_millis(500);
+    serial_hardware.sample_interval = time::Duration::from_millis(100);
 
     // TODO: Pico Technology / LabJack backends go here.
 
@@ -81,22 +87,27 @@ fn main() -> Result<()> {
         return Err("Not all devices connected. Fix the above, or remove those devices from the setup.".into());
     }
 
-    for _ in 0..10 {
-        // Read devices. A device that drops out is retried in the background
-        // and does not stop the others recording.
-        for (name, problem) in daq.read() {
-            eprintln!("    ! {}: {}", name, problem);
+    // Each device now reads on its own thread at its own rate, so this blocks
+    // for the length of the run rather than driving it. Nothing can look at a
+    // device while its thread holds it, so anything worth knowing arrives here.
+    daq.run_for(time::Duration::from_secs(5), &mut |event| match event {
+        DeviceEvent::Problem { device, error } => {
+            eprintln!("    ! {}: {}", device, error);
         }
-        for device in daq.devices.iter() {
-            device.print_latest();
+        DeviceEvent::Connected { device } => {
+            println!("    {} reconnected", device);
         }
-        // Drain what was read into storage, then make it durable. Flushing once
-        // per cycle rather than once per datapoint is what keeps the syscall
-        // count sane at higher sample rates.
-        daq.write()?;
-        daq.flush()?;
-        // Wait - just for testing, sample rates to be implemeted later.
-        thread::sleep(time::Duration::from_millis(200));
+        DeviceEvent::Disconnected { device, cause } => {
+            eprintln!(
+                "    ! {} disconnected: {}",
+                device,
+                cause.unwrap_or_else(|| "unknown".to_string())
+            );
+        }
+    })?;
+
+    for device in daq.devices.iter() {
+        device.print_latest();
     }
     // TODO: Convert results here if required.
     project.write_config(&daq.config())?;

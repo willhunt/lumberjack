@@ -7,6 +7,7 @@ pub mod device;
 pub mod daq;
 pub mod config;
 pub mod project;
+pub mod session;
 pub mod storage;
 pub mod storage_csv;
 pub mod storage_sqlite;
