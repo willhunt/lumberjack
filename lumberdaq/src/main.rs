@@ -1,5 +1,5 @@
 use lumberdaq::daq::Daq;
-use lumberdaq::hardware::mock_hardware;
+use lumberdaq::hardware::{ mock_hardware, serial_stream };
 use lumberdaq::project::Project;
 use lumberdaq::storage_csv::CsvSink;
 use lumberdaq::Result;
@@ -15,6 +15,28 @@ fn main() -> Result<()> {
         mock_hardware::create_device("Test device".to_string(), "-".to_string())?;
     mock_hardware::add_channel_random(&mut mock_hardware, "Random 1".to_string())?;
 
+    // Serial stream device
+    let mut serial_hardware = serial_stream::create_device(
+        "Serial test device".to_string(),
+        "Device streaming over serial.".to_string(),
+        "COM3".to_string(),
+        115200,
+    )?;
+    serial_stream::add_channel(
+        &mut serial_hardware,
+        "Pressure".to_string(),
+        "Differential pressure sensor".to_string(),
+        1,
+        "Pa".to_string(),
+    )?;
+    serial_stream::add_channel(
+        &mut serial_hardware,
+        "Pump Activation".to_string(),
+        "Pump on (1) or off (0)".to_string(),
+        3,
+        "-".to_string(),
+    )?;
+
     // TODO: Pico Technology / LabJack backends go here.
 
     // Serial device
@@ -26,7 +48,7 @@ fn main() -> Result<()> {
     let mut daq = Daq::new(
         "Example measurement".to_string(),
         "Joesephine Bloggs".to_string(),
-        vec![mock_hardware],
+        vec![mock_hardware, serial_hardware],
     )?;
 
     // Setup storage. Swapping csv for another format is a change to this line
