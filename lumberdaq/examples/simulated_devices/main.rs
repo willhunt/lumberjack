@@ -17,12 +17,17 @@ fn main() -> Result<()> {
     daq.set_sink(Box::new(sink))
         .unwrap_or_else(|err| panic!("Error intitialising storage: {err}"));
     // Connect to devices
-    daq.connect()?;
+    let report = daq.connect();
+    for (name, reason) in report.failed.iter() {
+        eprintln!("Could not connect to {}: {}", name, reason);
+    }
 
     for _ in 0..10 {
         // Read devices
-        for device in daq.devices.iter_mut() {
-            device.read()?;
+        for (name, problem) in daq.read() {
+            eprintln!("    ! {}: {}", name, problem);
+        }
+        for device in daq.devices.iter() {
             device.print_latest();
         }
         daq.write()?;

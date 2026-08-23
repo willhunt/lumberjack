@@ -4,6 +4,14 @@ use crate::config::DeviceConfig;
 use crate::hardware::{ Hardware, HardwareDataAquisition };
 use crate::storage::DataSink;
 use serde::{Deserialize, Serialize};
+use std::time::{ Duration, Instant };
+
+/// How long to leave a failed device alone before trying it again.
+///
+/// Retrying every read cycle would be worse than useless: opening a port that
+/// is not there is slow, so a dead device would stall every other device on
+/// every cycle.
+pub const RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 pub trait DeviceInterface {
     fn connect(&mut self) -> Result<()>;
@@ -16,11 +24,39 @@ pub struct DeviceInfo {
     pub description: String,
 }
 
-#[derive(Clone, Default)]
-pub enum ConnectionStatus{
+#[derive(Clone, Debug)]
+pub enum ConnectionStatus {
     Connected,
-    #[default]
-    Unconnected,
+    /// Not usable right now. Carries why, so it can be reported without
+    /// guessing, and when it was last tried, so retries stay spaced out.
+    /// `last_attempt` is None for a device that has never been tried.
+    Disconnected {
+        reason: String,
+        last_attempt: Option<Instant>,
+    },
+}
+
+impl Default for ConnectionStatus {
+    fn default() -> ConnectionStatus {
+        ConnectionStatus::Disconnected {
+            reason: "Not connected yet.".to_string(),
+            last_attempt: None,
+        }
+    }
+}
+
+/// Whether a device is due another connection attempt.
+///
+/// A device that has never been tried is due immediately; one that failed is
+/// due once `RETRY_INTERVAL` has passed since the last attempt.
+fn retry_due(status: &ConnectionStatus) -> bool {
+    match status {
+        ConnectionStatus::Connected => false,
+        ConnectionStatus::Disconnected { last_attempt, .. } => match last_attempt {
+            None => true,
+            Some(attempt) => attempt.elapsed() >= RETRY_INTERVAL,
+        },
+    }
 }
 
 /// A device as it exists while running: its description, the data acquired so
@@ -43,7 +79,7 @@ impl Device {
             info: config.info,
             channels: vec![],
             hardware: Hardware::from_config(config.hardware)?,
-            connection: ConnectionStatus::Unconnected,
+            connection: ConnectionStatus::default(),
         };
         for info in config.channels.into_iter() {
             device.add_channel(Channel::from_info(info))?;
@@ -69,7 +105,7 @@ impl Device {
             },            
             channels: vec![],
             hardware: hardware,
-            connection: ConnectionStatus::Unconnected,
+            connection: ConnectionStatus::default(),
         }
     }
 
@@ -90,21 +126,53 @@ impl Device {
         }
     }
 
+    pub fn is_connected(&self) -> bool {
+        matches!(self.connection, ConnectionStatus::Connected)
+    }
+
+    /// Why this device is unusable, or None if it is fine.
+    pub fn disconnected_reason(&self) -> Option<&str> {
+        match &self.connection {
+            ConnectionStatus::Connected => None,
+            ConnectionStatus::Disconnected { reason, .. } => Some(reason),
+        }
+    }
+
+    fn mark_disconnected(&mut self, reason: String) {
+        self.connection = ConnectionStatus::Disconnected {
+            reason: reason,
+            last_attempt: Some(Instant::now()),
+        };
+    }
+
+    /// Read this cycle's data, or quietly work towards being able to.
+    ///
+    /// A disconnected device is retried at most every `RETRY_INTERVAL` and
+    /// otherwise does nothing, so an unplugged cable costs one attempt every
+    /// few seconds rather than stalling every cycle.
+    ///
+    /// A read that fails is treated as having lost the device, so the same
+    /// retry path picks it up rather than the error repeating every cycle.
     pub fn read(&mut self) -> Result<()> {
-        // TODO: If not connected, attempt to connect and then try to read again maybe?
-        match self.connection {
-            ConnectionStatus::Connected => {
-                let mut input_readings = self.hardware.read()?;
+        if !self.is_connected() {
+            if retry_due(&self.connection) {
+                self.connect()?;
+            }
+            return Ok(());
+        }
+
+        match self.hardware.read() {
+            Ok(mut input_readings) => {
                 for (channel, datapoints) in self.channels.iter_mut().zip(input_readings.iter_mut()) {
                     channel.add_datapoints(datapoints)?;
                 }
-            },
-            ConnectionStatus::Unconnected => {
-                self.connect()?;
+                Ok(())
+            }
+            Err(error) => {
+                self.mark_disconnected(error.to_string());
+                Err(error)
             }
         }
-
-        Ok(())
     }
 
     pub fn write(&mut self, sink: &mut dyn DataSink) -> Result<()>{
@@ -117,15 +185,84 @@ impl Device {
 
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failed_at(when: Option<Instant>) -> ConnectionStatus {
+        ConnectionStatus::Disconnected {
+            reason: "Port not found.".to_string(),
+            last_attempt: when,
+        }
+    }
+
+    #[test]
+    fn a_device_never_tried_is_due_immediately() {
+        assert!(retry_due(&ConnectionStatus::default()));
+        assert!(retry_due(&failed_at(None)));
+    }
+
+    #[test]
+    fn a_device_that_just_failed_is_left_alone() {
+        assert!(!retry_due(&failed_at(Some(Instant::now()))));
+    }
+
+    #[test]
+    fn a_device_that_failed_long_enough_ago_is_due_again() {
+        let long_ago = Instant::now().checked_sub(RETRY_INTERVAL * 2).unwrap();
+        assert!(retry_due(&failed_at(Some(long_ago))));
+    }
+
+    #[test]
+    fn a_connected_device_is_never_due() {
+        assert!(!retry_due(&ConnectionStatus::Connected));
+    }
+
+    #[test]
+    fn a_new_device_starts_disconnected_with_a_reason() {
+        let device = Device::new("Test".to_string(), "-".to_string(), Hardware::None);
+        assert!(!device.is_connected());
+        assert!(device.disconnected_reason().is_some());
+    }
+
+    #[test]
+    fn a_failed_connection_is_recorded_on_the_device() {
+        // Hardware::None always refuses to connect, which is enough to check
+        // that the failure is stored rather than only returned.
+        let mut device = Device::new("Test".to_string(), "-".to_string(), Hardware::None);
+        assert!(device.connect().is_err());
+        assert!(!device.is_connected());
+        assert!(device.disconnected_reason().unwrap().contains("No hardware"));
+    }
+
+    #[test]
+    fn reading_a_disconnected_device_does_not_produce_data() {
+        let mut device = Device::new("Test".to_string(), "-".to_string(), Hardware::None);
+        // First read is due a retry, which fails and is reported.
+        assert!(device.read().is_err());
+        // The next read is inside the retry interval, so it does nothing at all
+        // rather than hammering the missing device.
+        assert!(device.read().is_ok());
+        assert!(!device.is_connected());
+    }
+}
+
 impl DeviceInterface for Device {
+    /// Attempt a connection, recording the outcome either way.
+    ///
+    /// The error is both stored and returned: stored so the device can report
+    /// its own state later, returned so a caller trying to connect everything
+    /// can collect what went wrong.
     fn connect(&mut self) -> Result<()> {
         match self.hardware.connect() {
-            Ok(()) => self.connection = ConnectionStatus::Connected,
-            Err(e) => {
-                self.connection = ConnectionStatus::Unconnected;
-                return Err(e);
-            },
+            Ok(()) => {
+                self.connection = ConnectionStatus::Connected;
+                Ok(())
+            }
+            Err(error) => {
+                self.mark_disconnected(error.to_string());
+                Err(error)
+            }
         }
-        Ok(())
     }
 }

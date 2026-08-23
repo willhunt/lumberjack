@@ -56,13 +56,28 @@ fn main() -> Result<()> {
     let sink = CsvSink::new(&project.results_path(), &project.header_path())?;
     daq.set_sink(Box::new(sink))
         .unwrap_or_else(|err| panic!("Error intitialising storage: {err}"));
-    // Connect to devices
-    daq.connect()?;
+    // Connect to devices. Every device is tried, so one bad port does not hide
+    // the state of the rest.
+    let report = daq.connect();
+    if !report.all_connected() {
+        eprintln!();
+        eprintln!("Could not connect to {} of {} devices:", report.failed.len(), daq.devices.len());
+        for (name, reason) in report.failed.iter() {
+            eprintln!("    {}: {}", name, reason);
+        }
+        // Refusing to start is the safe default for a test rig: recording a run
+        // that is quietly missing a device wastes the run. Change this to a
+        // warning if you would rather start anyway and let the retry pick it up.
+        return Err("Not all devices connected. Fix the above, or remove those devices from the setup.".into());
+    }
 
     for _ in 0..10 {
-        // Read devices
-        for device in daq.devices.iter_mut() {
-            device.read()?;
+        // Read devices. A device that drops out is retried in the background
+        // and does not stop the others recording.
+        for (name, problem) in daq.read() {
+            eprintln!("    ! {}: {}", name, problem);
+        }
+        for device in daq.devices.iter() {
             device.print_latest();
         }
         // Drain what was read into storage, then make it durable. Flushing once

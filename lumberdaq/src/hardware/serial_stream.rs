@@ -212,6 +212,7 @@ pub enum SerialStreamInput {
     LineInput { index: i64 },
 }
 impl ChannelDataAquisition for SerialStreamInput {
+    /// All channels must be read together in the device read method, so this is not implemented for the individual channel.
     fn read(&mut self) -> Result<Vec<DataPoint>> {
         match self {
             SerialStreamInput::LineInput {index: _} => {

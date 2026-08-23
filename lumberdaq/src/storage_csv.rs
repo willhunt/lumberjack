@@ -169,7 +169,7 @@ pub fn read_results(csv_path: &std::path::PathBuf, json_path: &std::path::PathBu
             info: device_header.info.clone(),
             channels: channels,
             hardware: Hardware::None,
-            connection: ConnectionStatus::Unconnected,
+            connection: ConnectionStatus::default(),
         };
         devices.push(device);
 
