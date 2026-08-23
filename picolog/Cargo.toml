@@ -1,0 +1,16 @@
+[package]
+name = "picolog"
+version = "0.1.0"
+edition = "2021"
+description = "Safe wrappers over the Pico Technology data logger drivers"
+
+# libloading only. The driver is found at runtime rather than linked, so this
+# builds on a machine with no Pico software installed and fails at open() with
+# something readable instead of failing to link.
+#
+# Deliberately no bindgen here: the bindings in src/raw are generated once and
+# committed. Running bindgen from build.rs would put libclang and the PicoSDK
+# on the critical path of every build on every machine, which is what made the
+# old daqmx-rs dependency painful.
+[dependencies]
+libloading = "0.8"
