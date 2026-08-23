@@ -48,7 +48,7 @@ pub struct SqliteSink {
 /// Stamped into the file so a database written by a different version of the
 /// schema is refused with an explanation rather than a raw SQL error about a
 /// missing column. Bump it whenever the tables change.
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 impl SqliteSink {
     pub fn new(path: &Path) -> Result<SqliteSink> {
@@ -140,12 +140,12 @@ impl DataSink for SqliteSink {
                  hardware    TEXT NOT NULL,
                  UNIQUE(run_id, name)
              );
+             -- Enough to label a series. What each channel physically reads is
+             -- in devices.hardware, which holds the binding already; repeating
+             -- it here would be a second copy of the same fact.
              CREATE TABLE IF NOT EXISTS channels (
                  id          INTEGER PRIMARY KEY,
                  device_id   INTEGER NOT NULL REFERENCES devices(id),
-                 -- What the hardware calls this channel: the frame index for a
-                 -- serial device, and whatever identifies an input elsewhere.
-                 hardware_id TEXT NOT NULL,
                  name        TEXT NOT NULL,
                  unit        TEXT NOT NULL,
                  description TEXT NOT NULL,
@@ -183,11 +183,10 @@ impl DataSink for SqliteSink {
             let mut ids: HashMap<String, i64> = HashMap::new();
             for channel in device.hardware.channel_infos().iter() {
                 self.connection.execute(
-                    "INSERT INTO channels (device_id, hardware_id, name, unit, description)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO channels (device_id, name, unit, description)
+                     VALUES (?1, ?2, ?3, ?4)",
                     rusqlite::params![
                         device_id,
-                        channel.id,
                         channel.name,
                         channel.unit,
                         channel.description
@@ -421,21 +420,23 @@ mod tests {
         assert_eq!(per_run, vec![(1, 2), (2, 1)]);
     }
 
-    /// The hardware binding is recorded, not just the label. For a serial
-    /// device that is the frame index, which is what decides what a channel
-    /// physically reads.
+    /// The binding is recoverable without a column of its own: it is in the
+    /// stored hardware config, which is the one place it is written.
     #[test]
-    fn the_hardware_binding_is_recorded_next_to_the_label() {
+    fn the_binding_is_recoverable_from_the_stored_config() {
         let dir = temp_dir("sqlite_binding");
         let sink = sink_in(&dir);
-        let (hardware_id, name): (String, String) = sink
+        let index: i64 = sink
             .connection
-            .query_row("SELECT hardware_id, name FROM channels", [], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
+            .query_row(
+                "SELECT json_extract(channel.value, '$.index')
+                   FROM devices, json_each(devices.hardware, '$.channels') AS channel
+                  WHERE json_extract(channel.value, '$.name') = 'Pressure'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(name, "Pressure");
-        assert_eq!(hardware_id, "1");
+        assert_eq!(index, 1);
     }
 
     /// The point of storing the config: two runs whose channels share a name
