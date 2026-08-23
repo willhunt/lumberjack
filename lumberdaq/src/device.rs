@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{ Error, Result };
 use crate::channel::Channel;
 use crate::config::DeviceConfig;
 use crate::hardware::{ Hardware, HardwareDataAquisition };
@@ -24,25 +24,20 @@ pub struct DeviceInfo {
     pub description: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Default)]
 pub enum ConnectionStatus {
     Connected,
-    /// Not usable right now. Carries why, so it can be reported without
-    /// guessing, and when it was last tried, so retries stay spaced out.
-    /// `last_attempt` is None for a device that has never been tried.
+    /// Set up but never yet attempted.
+    #[default]
+    NeverConnected,
+    /// Tried and failed. Carries the error itself rather than its message, so
+    /// a caller can tell an unavailable port from a bad frame pattern and offer
+    /// something useful about it, and the time of the attempt so retries stay
+    /// spaced out.
     Disconnected {
-        reason: String,
-        last_attempt: Option<Instant>,
+        cause: Error,
+        last_attempt: Instant,
     },
-}
-
-impl Default for ConnectionStatus {
-    fn default() -> ConnectionStatus {
-        ConnectionStatus::Disconnected {
-            reason: "Not connected yet.".to_string(),
-            last_attempt: None,
-        }
-    }
 }
 
 /// Whether a device is due another connection attempt.
@@ -52,10 +47,10 @@ impl Default for ConnectionStatus {
 fn retry_due(status: &ConnectionStatus) -> bool {
     match status {
         ConnectionStatus::Connected => false,
-        ConnectionStatus::Disconnected { last_attempt, .. } => match last_attempt {
-            None => true,
-            Some(attempt) => attempt.elapsed() >= RETRY_INTERVAL,
-        },
+        ConnectionStatus::NeverConnected => true,
+        ConnectionStatus::Disconnected { last_attempt, .. } => {
+            last_attempt.elapsed() >= RETRY_INTERVAL
+        }
     }
 }
 
@@ -142,19 +137,38 @@ impl Device {
         matches!(self.connection, ConnectionStatus::Connected)
     }
 
-    /// Why this device is unusable, or None if it is fine.
-    pub fn disconnected_reason(&self) -> Option<&str> {
+    /// What went wrong last time this device was tried.
+    ///
+    /// None if it is connected, or if it has never been attempted, which are
+    /// distinguishable through `connection` itself.
+    pub fn disconnection_cause(&self) -> Option<&Error> {
         match &self.connection {
-            ConnectionStatus::Connected => None,
-            ConnectionStatus::Disconnected { reason, .. } => Some(reason),
+            ConnectionStatus::Disconnected { cause, .. } => Some(cause),
+            _ => None,
         }
     }
 
-    fn mark_disconnected(&mut self, reason: String) {
+    fn mark_disconnected(&mut self, cause: Error) {
         self.connection = ConnectionStatus::Disconnected {
-            reason: reason,
-            last_attempt: Some(Instant::now()),
+            cause: cause,
+            last_attempt: Instant::now(),
         };
+    }
+
+    /// Attempt a connection, recording the outcome.
+    ///
+    /// Returns whether the device is now usable. It deliberately does not
+    /// return the error: a failure is kept as state on the device, reachable
+    /// through `disconnection_cause`, because a device being unavailable is an
+    /// ordinary operating condition here rather than a failure of this call.
+    /// Handing the error back as well would mean owning it in two places, and
+    /// errors cannot be cloned.
+    pub fn connect(&mut self) -> bool {
+        match self.hardware.connect() {
+            Ok(()) => self.connection = ConnectionStatus::Connected,
+            Err(error) => self.mark_disconnected(error),
+        }
+        self.is_connected()
     }
 
     /// Read this cycle's data, or quietly work towards being able to.
@@ -168,7 +182,7 @@ impl Device {
     pub fn read(&mut self) -> Result<()> {
         if !self.is_connected() {
             if retry_due(&self.connection) {
-                self.connect()?;
+                self.connect();
             }
             return Ok(());
         }
@@ -180,15 +194,16 @@ impl Device {
                 }
                 Ok(())
             }
-            Err(error) => {
-                // Only stand the device down if it has actually gone away. A
-                // frame that failed to parse leaves a perfectly good port open,
-                // and reconnecting it would lose data for nothing.
-                if error.is_connection_lost() {
-                    self.mark_disconnected(error.to_string());
-                }
-                Err(error)
+            // The device has gone. That becomes state for the retry path to
+            // pick up, not an error from this call, and the cause is kept.
+            Err(error) if error.is_connection_lost() => {
+                self.mark_disconnected(error);
+                Ok(())
             }
+            // The port is fine; the data or the configuration is wrong. Say so,
+            // and leave the connection alone: reconnecting a healthy port fixes
+            // nothing and loses whatever arrives meanwhile.
+            Err(error) => Err(error),
         }
     }
 
@@ -206,9 +221,9 @@ impl Device {
 mod tests {
     use super::*;
 
-    fn failed_at(when: Option<Instant>) -> ConnectionStatus {
+    fn failed_at(when: Instant) -> ConnectionStatus {
         ConnectionStatus::Disconnected {
-            reason: "Port not found.".to_string(),
+            cause: Error::NotConnected { port: "COM9".to_string() },
             last_attempt: when,
         }
     }
@@ -216,18 +231,18 @@ mod tests {
     #[test]
     fn a_device_never_tried_is_due_immediately() {
         assert!(retry_due(&ConnectionStatus::default()));
-        assert!(retry_due(&failed_at(None)));
+        assert!(matches!(ConnectionStatus::default(), ConnectionStatus::NeverConnected));
     }
 
     #[test]
     fn a_device_that_just_failed_is_left_alone() {
-        assert!(!retry_due(&failed_at(Some(Instant::now()))));
+        assert!(!retry_due(&failed_at(Instant::now())));
     }
 
     #[test]
     fn a_device_that_failed_long_enough_ago_is_due_again() {
         let long_ago = Instant::now().checked_sub(RETRY_INTERVAL * 2).unwrap();
-        assert!(retry_due(&failed_at(Some(long_ago))));
+        assert!(retry_due(&failed_at(long_ago)));
     }
 
     #[test]
@@ -235,24 +250,25 @@ mod tests {
         assert!(!retry_due(&ConnectionStatus::Connected));
     }
 
+    /// Never attempted is a different thing from attempted and failed, and only
+    /// the second has a cause to report.
     #[test]
-    fn a_new_device_starts_disconnected_with_a_reason() {
+    fn a_new_device_has_not_been_tried_rather_than_having_failed() {
         let device = Device::new("Test".to_string(), "-".to_string(), Hardware::None);
         assert!(!device.is_connected());
-        assert!(device.disconnected_reason().is_some());
+        assert!(matches!(device.connection, ConnectionStatus::NeverConnected));
+        assert!(device.disconnection_cause().is_none());
     }
 
     #[test]
-    fn a_failed_connection_is_recorded_on_the_device() {
-        // Hardware::None always refuses to connect, which is enough to check
-        // that the failure is stored rather than only returned.
+    fn a_failed_connection_keeps_the_error_itself() {
+        // Hardware::None always refuses to connect.
         let mut device = Device::new("Test".to_string(), "-".to_string(), Hardware::None);
-        // Matching the variant rather than the message: the whole point of a
-        // typed error is that callers stop parsing prose.
-        let error = device.connect().err().unwrap();
-        assert!(matches!(error, crate::Error::NoHardware));
+        assert!(!device.connect());
         assert!(!device.is_connected());
-        assert!(device.disconnected_reason().is_some());
+        // Matching the stored variant rather than a message: the whole point of
+        // keeping the error is that callers stop parsing prose.
+        assert!(matches!(device.disconnection_cause(), Some(Error::NoHardware)));
     }
 
     #[test]
@@ -282,8 +298,12 @@ mod tests {
     #[test]
     fn reading_a_disconnected_device_does_not_produce_data() {
         let mut device = Device::new("Test".to_string(), "-".to_string(), Hardware::None);
-        // First read is due a retry, which fails and is reported.
-        assert!(device.read().is_err());
+        // The first read is due a retry. It fails, but a device being
+        // unavailable is a state rather than a failure of this call, so the
+        // cause is recorded and Ok comes back.
+        assert!(device.read().is_ok());
+        assert!(!device.is_connected());
+        assert!(matches!(device.disconnection_cause(), Some(Error::NoHardware)));
         // The next read is inside the retry interval, so it does nothing at all
         // rather than hammering the missing device.
         assert!(device.read().is_ok());
@@ -291,22 +311,7 @@ mod tests {
     }
 }
 
-impl DeviceInterface for Device {
-    /// Attempt a connection, recording the outcome either way.
-    ///
-    /// The error is both stored and returned: stored so the device can report
-    /// its own state later, returned so a caller trying to connect everything
-    /// can collect what went wrong.
-    fn connect(&mut self) -> Result<()> {
-        match self.hardware.connect() {
-            Ok(()) => {
-                self.connection = ConnectionStatus::Connected;
-                Ok(())
-            }
-            Err(error) => {
-                self.mark_disconnected(error.to_string());
-                Err(error)
-            }
-        }
-    }
-}
+// Device deliberately does not implement DeviceInterface. That trait is the
+// contract for talking to hardware, where connect either works or hands back
+// an error. A Device wraps that in a state machine, so its connect reports
+// usability instead, and keeps the cause.

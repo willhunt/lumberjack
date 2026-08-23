@@ -1,6 +1,6 @@
-use crate::Result;
+use crate::{ Error, Result };
 use crate::config::{ DaqConfig, DeviceConfig };
-use crate::device::{ Device, DeviceInterface };
+use crate::device::Device;
 use crate::storage::{ DaqHeader, DataSink };
 use serde::{ Deserialize, Serialize };
 
@@ -90,9 +90,14 @@ impl Daq {
     pub fn connect(&mut self) -> ConnectionReport {
         let mut report = ConnectionReport { connected: vec![], failed: vec![] };
         for device in self.devices.iter_mut() {
-            match device.connect() {
-                Ok(()) => report.connected.push(device.info.name.clone()),
-                Err(error) => report.failed.push((device.info.name.clone(), error.to_string())),
+            if device.connect() {
+                report.connected.push(device.info.name.clone());
+            } else {
+                let cause = match device.disconnection_cause() {
+                    Some(error) => error.to_string(),
+                    None => "unknown".to_string(),
+                };
+                report.failed.push((device.info.name.clone(), cause));
             }
         }
         report
@@ -106,21 +111,32 @@ impl Daq {
     pub fn read(&mut self) -> Vec<(String, String)> {
         let mut problems: Vec<(String, String)> = Vec::new();
         for device in self.devices.iter_mut() {
+            let was_connected = device.is_connected();
             if let Err(error) = device.read() {
                 problems.push((device.info.name.clone(), error.to_string()));
+            }
+            // Losing a device is state rather than an error, so report the
+            // moment it happens instead of every cycle it stays down.
+            if was_connected && !device.is_connected() {
+                let cause = match device.disconnection_cause() {
+                    Some(error) => error.to_string(),
+                    None => "unknown".to_string(),
+                };
+                problems.push((device.info.name.clone(), format!("lost connection: {}", cause)));
             }
         }
         problems
     }
 
-    /// Devices that are currently unusable, and why.
-    pub fn disconnected(&self) -> Vec<(String, String)> {
+    /// Devices that are not currently usable, paired with what went wrong.
+    ///
+    /// The cause is None for a device that has not been attempted yet, which is
+    /// a different situation from one that was tried and failed.
+    pub fn disconnected(&self) -> Vec<(&str, Option<&Error>)> {
         self.devices
             .iter()
-            .filter_map(|device| {
-                device.disconnected_reason()
-                    .map(|reason| (device.info.name.clone(), reason.to_string()))
-            })
+            .filter(|device| !device.is_connected())
+            .map(|device| (device.info.name.as_str(), device.disconnection_cause()))
             .collect()
     }
 
@@ -214,6 +230,8 @@ mod tests {
         let down = daq.disconnected();
         assert_eq!(down.len(), 1);
         assert_eq!(down[0].0, "Bad");
-        assert!(down[0].1.contains("hardware"));
+        // The cause comes back as the error itself, so a caller can decide what
+        // to offer the user rather than reading the message.
+        assert!(matches!(down[0].1, Some(Error::NoHardware)));
     }
 }
