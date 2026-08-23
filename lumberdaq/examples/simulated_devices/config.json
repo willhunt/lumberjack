@@ -11,17 +11,10 @@
       },
       "channels": [
         {
-          "info": {
-            "id": "c0",
-            "name": "Random 1",
-            "unit": "-",
-            "description": "Random number generator"
-          },
-          "datapoints": [],
-          "datapoint_last": {
-            "datetime": "2026-08-23T10:09:51.272599200Z",
-            "value": 0.07000443154289793
-          }
+          "id": "c0",
+          "name": "Random 1",
+          "unit": "-",
+          "description": "Random number generator"
         }
       ],
       "hardware": {
@@ -32,7 +25,5 @@
         ]
       }
     }
-  ],
-  "json_path": "examples/simulated_devices/test_results.json",
-  "csv_path": "examples/simulated_devices/test_results.csv"
+  ]
 }

@@ -30,13 +30,18 @@ impl Channel {
     //     Ok(())
     // }
     pub fn new(id: String, name: String, unit: String, description: String) -> Channel {
+        Channel::from_info(ChannelInfo {
+            id: id,
+            name: name,
+            unit: unit,
+            description: description,
+        })
+    }
+
+    /// Start an empty channel from its description in a config.
+    pub fn from_info(info: ChannelInfo) -> Channel {
         Channel {
-            info: ChannelInfo {
-                id: id,
-                name: name,
-                unit: unit,
-                description: description,
-            },
+            info: info,
             datapoints: vec![],
             datapoint_last: None,
         }

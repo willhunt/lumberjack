@@ -1,33 +1,52 @@
 use crate::Result;
+use crate::config::{ DaqConfig, DeviceConfig };
 use crate::device::{ Device, DeviceInterface };
 use crate::storage::{ DaqHeader, DataSink };
 use serde::{ Deserialize, Serialize };
 
-#[derive(Serialize, Deserialize, Clone)] // csv_writer connot be cloned
+#[derive(Serialize, Deserialize, Clone)]
 pub struct DaqInfo {
     pub name: String,
     pub author: String,
 }
 
-#[derive(Serialize, Deserialize)] // a live sink cannot be cloned or serialized
+/// A measurement session as it exists while running. Owns the devices and the
+/// sink, so it is neither serializable nor cloneable; `config()` is how you
+/// get something that is.
 pub struct Daq {
     pub info: DaqInfo,
     pub devices: Vec<Device>,
-    pub json_path: std::path::PathBuf,
-    pub csv_path: std::path::PathBuf,
-    #[serde(skip)]
     pub sink: Option<Box<dyn DataSink>>,
 }
 impl Daq {
-    pub fn new(name: String, author: String, devices: Vec<Device>, storage_path: std::path::PathBuf) -> Result<Daq> {
+    /// Build a whole running system from a saved setup.
+    ///
+    /// Where results get written is not decided here. That comes from the
+    /// `Project` the config was loaded out of, and reaches the Daq as a sink.
+    pub fn from_config(config: DaqConfig) -> Result<Daq> {
+        let mut devices: Vec<Device> = Vec::new();
+        for device_config in config.devices.into_iter() {
+            devices.push(Device::from_config(device_config)?);
+        }
+        Daq::new(config.info.name, config.info.author, devices)
+    }
+
+    /// Describe this setup so it can be saved. Contains no measurement data,
+    /// no file paths and no open handles - only what is needed to rebuild it.
+    pub fn config(&self) -> DaqConfig {
+        DaqConfig {
+            info: self.info.clone(),
+            devices: self.devices.iter().map(|device| device.config()).collect::<Vec<DeviceConfig>>(),
+        }
+    }
+
+    pub fn new(name: String, author: String, devices: Vec<Device>) -> Result<Daq> {
         let mut daq = Daq {
             info: DaqInfo {
                 name: name,
-                author: author,     
+                author: author,
             },
             devices: vec![],
-            json_path: storage_path.clone().with_extension("json"),
-            csv_path: storage_path,
             sink: None,
         };
         // daq.add_device(devices.pop().unwrap());

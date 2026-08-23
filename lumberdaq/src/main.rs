@@ -1,15 +1,13 @@
-use lumberdaq::configuration::write_configuration_file;
 use lumberdaq::daq::Daq;
 use lumberdaq::hardware::mock_hardware;
+use lumberdaq::project::Project;
 use lumberdaq::storage_csv::CsvSink;
 use lumberdaq::Result;
 use std::{thread, time};
 
 fn main() -> Result<()> {
-    let storage_path = std::path::PathBuf::from("examples/simulated_devices/test_results.csv");
-    let config_path = std::path::PathBuf::from("examples/simulated_devices/config.json");
-    // Load config
-    // read_configuration_file("examples/simulated_devices/config.json")?;
+    // Everything this run reads or writes lives under here.
+    let project = Project::create("examples/simulated_devices")?;
 
     println!("Lets create some devices");
     // Mock device
@@ -29,12 +27,11 @@ fn main() -> Result<()> {
         "Example measurement".to_string(),
         "Joesephine Bloggs".to_string(),
         vec![mock_hardware],
-        storage_path,
     )?;
 
     // Setup storage. Swapping csv for another format is a change to this line
     // only; nothing downstream of here knows the format.
-    let sink = CsvSink::new(&daq.csv_path.clone(), &daq.json_path.clone())?;
+    let sink = CsvSink::new(&project.results_path(), &project.header_path())?;
     daq.set_sink(Box::new(sink))
         .unwrap_or_else(|err| panic!("Error intitialising storage: {err}"));
     // Connect to devices
@@ -51,10 +48,10 @@ fn main() -> Result<()> {
         // count sane at higher sample rates.
         daq.write()?;
         daq.flush()?;
-        // Wait
+        // Wait - just for testing, sample rates to be implemeted later.
         thread::sleep(time::Duration::from_millis(200));
     }
     // TODO: Convert results here if required.
-    write_configuration_file(&config_path, &daq)?;
+    project.write_config(&daq.config())?;
     Ok(())
 }

@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::channel::Channel;
+use crate::config::DeviceConfig;
 use crate::hardware::{ Hardware, HardwareDataAquisition };
 use crate::storage::DataSink;
 use serde::{Deserialize, Serialize};
@@ -22,16 +23,44 @@ pub enum ConnectionStatus{
     Unconnected,
 }
 
-#[derive(Serialize, Deserialize)]
+/// A device as it exists while running: its description, the data acquired so
+/// far, and the hardware it is talking to. Not serializable - saving one means
+/// asking it for its `DeviceConfig`.
 pub struct Device {
     pub info: DeviceInfo,
     pub channels: Vec<Channel>,
     pub hardware: Hardware,
-    #[serde(skip)]
     pub connection: ConnectionStatus,
 }
 
 impl Device {
+    /// Build a running device from its description.
+    ///
+    /// Channels go through `add_channel`, so a config with duplicate channel
+    /// names is rejected here rather than surfacing later.
+    pub fn from_config(config: DeviceConfig) -> Result<Device> {
+        let mut device = Device {
+            info: config.info,
+            channels: vec![],
+            hardware: Hardware::from_config(config.hardware)?,
+            connection: ConnectionStatus::Unconnected,
+        };
+        for info in config.channels.into_iter() {
+            device.add_channel(Channel::from_info(info))?;
+        }
+        Ok(device)
+    }
+
+    /// Describe this device so it can be saved. The channel list is projected
+    /// from the live channels rather than stored twice.
+    pub fn config(&self) -> DeviceConfig {
+        DeviceConfig {
+            info: self.info.clone(),
+            channels: self.channels.iter().map(|channel| channel.info.clone()).collect(),
+            hardware: self.hardware.config(),
+        }
+    }
+
     pub fn new(name: String, description: String, hardware: Hardware) -> Device {
         Device {
             info: DeviceInfo {

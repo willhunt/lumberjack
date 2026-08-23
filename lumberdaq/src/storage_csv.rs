@@ -177,8 +177,6 @@ pub fn read_results(csv_path: &std::path::PathBuf, json_path: &std::path::PathBu
     let daq = Daq {
         info: header.info,
         devices: devices,
-        json_path: json_path.clone(),
-        csv_path: csv_path.clone(),
         sink: None,
     };
     return Ok(daq);

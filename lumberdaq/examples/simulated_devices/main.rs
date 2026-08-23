@@ -1,19 +1,19 @@
 use lumberdaq::Result;
 use std::{thread, time};
-use lumberdaq::configuration::read_configuration_file;
+use lumberdaq::daq::Daq;
+use lumberdaq::project::Project;
 use lumberdaq::storage_csv::CsvSink;
 
 fn main() -> Result<()> {
-    let storage_path = std::path::PathBuf::from("examples/simulated_devices/test_results_2.csv");
-    let config_path = std::path::PathBuf::from("examples/simulated_devices/config.json");
-    // Load config
-    let mut daq = read_configuration_file(&config_path)?;
-    // The config carries the paths it was saved with, so point both at this run.
-    daq.json_path = storage_path.with_extension("json");
-    daq.csv_path = storage_path;
+    // Re-run an existing project: read the setup that was saved in this
+    // directory and rebuild it. Nothing here needs to know any file paths,
+    // only where the project lives.
+    let project = Project::new("examples/simulated_devices");
+    let config = project.read_config()?;
+    let mut daq = Daq::from_config(config)?;
 
     // Setup storage
-    let sink = CsvSink::new(&daq.csv_path.clone(), &daq.json_path.clone())?;
+    let sink = CsvSink::new(&project.results_path(), &project.header_path())?;
     daq.set_sink(Box::new(sink))
         .unwrap_or_else(|err| panic!("Error intitialising storage: {err}"));
     // Connect to devices

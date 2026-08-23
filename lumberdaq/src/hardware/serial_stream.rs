@@ -6,26 +6,58 @@ use crate::hardware::{HardwareDataAquisition, Hardware };
 use serde::{ Deserialize, Serialize };
 use serialport;
 use chrono;
-// use std::io::{self, Read};
 use std::time::Duration;
 
-#[derive(Serialize, Deserialize)]  // Cloning an issue with serialport
+/// Everything needed to describe a serial device in a config file.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SerialStreamConfig {
+    pub description: String,
+    pub port: String,
+    pub baudrate: u32,
+    pub inputs: Vec<SerialStreamInput>,
+}
+
+/// The running device: its settings, plus the open port once connected.
+///
+/// The port handle is the reason this type cannot derive Serialize or Clone,
+/// and the reason the settings live in a separate struct that can.
 pub struct SerialStream {
-    description: String,
-    inputs: Vec<SerialStreamInput>,
-    #[serde(skip, default)]
+    config: SerialStreamConfig,
     serial_port: Option<Box<dyn serialport::SerialPort + Send>>,
-    port: String,
-    baudrate: u32,
-    // #[serde(skip)]
-    // serial: Option<>,
+}
+
+impl SerialStream {
+    pub fn new(port: String, baudrate: u32) -> Result<SerialStream> {
+        SerialStream::from_config(SerialStreamConfig {
+            description: "Device streaming over serial.".to_string(),
+            port: port,
+            baudrate: baudrate,
+            inputs: vec![],
+        })
+    }
+
+    pub fn from_config(config: SerialStreamConfig) -> Result<SerialStream> {
+        Ok(SerialStream {
+            config: config,
+            serial_port: None,
+        })
+    }
+
+    pub fn config(&self) -> SerialStreamConfig {
+        self.config.clone()
+    }
+
+    pub fn add_input(&mut self, input: SerialStreamInput) {
+        self.config.inputs.push(input);
+    }
 }
 
 impl DeviceInterface for SerialStream {
     fn connect(&mut self) -> Result<()> {
-        let _port = serialport::new(&self.port, self.baudrate)
+        let port = serialport::new(&self.config.port, self.config.baudrate)
             .timeout(Duration::from_millis(100))
             .open()?;
+        self.serial_port = Some(port);
         Ok(())
     }
 }
@@ -33,22 +65,10 @@ impl DeviceInterface for SerialStream {
 
 impl HardwareDataAquisition for SerialStream {
     fn read(&mut self) -> Result<Vec<Vec<DataPoint>>> {
-        let mut readings: Vec<Vec<DataPoint>> = vec![];
+        let readings: Vec<Vec<DataPoint>> = vec![];
         let _timestamp = chrono::Utc::now();
         /////////////////////////////////////////////// TODO
         Ok(readings)
-    }
-}
-
-impl SerialStream {
-    pub fn new(port: String, baudrate: u32) -> Result<SerialStream> {
-        Ok(SerialStream {
-            description: "Device streaming over serial.".to_string(),
-            inputs: vec![],
-            port: port,
-            baudrate: baudrate,
-            serial_port: None,
-        })
     }
 }
 
@@ -74,13 +94,13 @@ pub fn create_device(name: String, description: String, port: String, baudrate: 
 pub fn add_channel(device: &mut Device, name: String, description: String, index: i64, unit: String) -> Result<()> {
     match &mut device.hardware {
         Hardware::SerialStream(hardware) => {
-            hardware.inputs.push(SerialStreamInput::LineInput { index: index });
+            hardware.add_input(SerialStreamInput::LineInput { index: index });
         },
         _ => {
-            return Err("This channel can only be added to a NI USB 6001 device.".into())
+            return Err("This channel can only be added to a serial stream device.".into())
         }
     }
-    
+
     let channel = Channel::new(
         index.to_string(),
         name,

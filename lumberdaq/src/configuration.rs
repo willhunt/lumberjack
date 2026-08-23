@@ -1,8 +1,6 @@
 use crate::Result;
-// use crate::device::DeviceInterface;
-// use crate::hardware::{ Hardware, Input };
+use crate::config::DaqConfig;
 use crate::storage_csv::check_file_extension;
-use crate::daq::Daq;
 use std::fs::File;
 use std::io::{ Read, Write }; // ErrorKind
 // use std::io::BufReader;
@@ -32,19 +30,22 @@ use std::ffi::OsStr;
 //     Ok(())
 // }
 
-pub fn write_configuration_file(path: &std::path::PathBuf, daq: &Daq) -> Result<()> {
+pub fn write_configuration_file(path: &std::path::PathBuf, config: &DaqConfig) -> Result<()> {
     check_file_extension(path, OsStr::new("json"))?;
     let mut file = File::create(path)?;
-    file.write_all(to_string_pretty(&daq)?.as_bytes())?;
+    file.write_all(to_string_pretty(config)?.as_bytes())?;
     return Ok(());
 }
 
-pub fn read_configuration_file(path: &std::path::PathBuf) -> Result<Daq> {
+/// Read a saved setup. This returns a `DaqConfig`, not a `Daq`: what comes off
+/// disk is a description, and turning it into something connected to hardware
+/// is `Daq::from_config`.
+pub fn read_configuration_file(path: &std::path::PathBuf) -> Result<DaqConfig> {
     check_file_extension(path, OsStr::new("json"))?;
     let mut file = File::open(path)?;
     let mut data = String::new();
     file.read_to_string(&mut data)?;
 
-    let daq: Daq = serde_json::from_str(&data)?;
-    return Ok(daq);
+    let config: DaqConfig = serde_json::from_str(&data)?;
+    return Ok(config);
 }

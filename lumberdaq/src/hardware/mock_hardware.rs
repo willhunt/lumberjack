@@ -7,18 +7,43 @@ use serde::{Deserialize, Serialize};
 use chrono;
 use rand::random;
 
+/// Everything needed to describe a mock device in a config file.
 #[derive(Serialize, Deserialize, Clone)]
+pub struct MockHardwareConfig {
+    pub description: String,
+    pub inputs: Vec<MockHardwareInput>,
+}
+
+impl Default for MockHardwareConfig {
+    fn default() -> MockHardwareConfig {
+        MockHardwareConfig {
+            description: "This is a mock device that uses no hardware. It is used for testing and development purposes.".to_string(),
+            inputs: vec![],
+        }
+    }
+}
+
+/// The running device. Mock owns no hardware resource, so it is only its
+/// config; the wrapper exists so every backend has the same shape.
 pub struct MockHardware {
-    description: String,
-    inputs: Vec<MockHardwareInput>,
+    config: MockHardwareConfig,
 }
 
 impl MockHardware {
     pub fn new() -> Result<MockHardware> {
-        Ok(MockHardware {
-            description: "This is a mock device that uses no hardware. It is used for testing and development purposes.".to_string(),
-            inputs: vec![],
-        })
+        MockHardware::from_config(MockHardwareConfig::default())
+    }
+
+    pub fn from_config(config: MockHardwareConfig) -> Result<MockHardware> {
+        Ok(MockHardware { config: config })
+    }
+
+    pub fn config(&self) -> MockHardwareConfig {
+        self.config.clone()
+    }
+
+    pub fn add_input(&mut self, input: MockHardwareInput) {
+        self.config.inputs.push(input);
     }
 }
 
@@ -32,7 +57,7 @@ impl DeviceInterface for MockHardware {
 impl HardwareDataAquisition for MockHardware {
     fn read(&mut self) -> Result<Vec<Vec<DataPoint>>> {
         let mut readings: Vec<Vec<DataPoint>> = vec![];
-        for input in self.inputs.iter_mut() {
+        for input in self.config.inputs.iter_mut() {
             let datapoints = input.read()?;
             readings.push(datapoints);
         }
@@ -72,7 +97,7 @@ pub fn create_device(name: String, description: String) -> Result<Device> {
 pub fn add_channel_random(device: &mut Device, name: String) -> Result<()> {
     match &mut device.hardware {
         Hardware::MockHardware(hardware) => {
-            hardware.inputs.push(MockHardwareInput::Random);
+            hardware.add_input(MockHardwareInput::Random);
         },
         _ => {
             return Err("This channel can only be added to a Mock Hardware device.".into())
