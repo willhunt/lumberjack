@@ -119,6 +119,15 @@ impl SerialStream {
 
 impl DeviceInterface for SerialStream {
     fn connect(&mut self) -> Result<()> {
+        // Anything still buffered arrived before this connection. Joining it to
+        // bytes that arrive after would build one frame out of two, half from
+        // either side of the outage, and it would parse perfectly: a plausible
+        // reading stamped with the time of the reconnection.
+        //
+        // Cleared before opening rather than after, so a failed attempt drops
+        // the stale bytes too. There is nothing useful in them either way.
+        self.buffer.clear();
+
         let port = serialport::new(&self.config.port, self.config.baudrate)
             .timeout(Duration::from_millis(100))
             .open()?;
@@ -353,6 +362,20 @@ mod tests {
         let pattern = Regex::new(r"\$DATA,([^*]*)\*[0-9A-F]{2}\r\n").unwrap();
         let mut buffer = String::from("$DATA,1,2.00,3*7F\r\n");
         assert_eq!(take_latest_frame(&mut buffer, &pattern).unwrap(), "1,2.00,3");
+    }
+
+    /// A device that drops out mid frame leaves a partial one behind. Carrying
+    /// it across a reconnection would splice it onto whatever arrives next.
+    ///
+    /// Clearing happens before the port is opened, which is what lets this test
+    /// run without hardware: the connection below fails, and the buffer must
+    /// still have been emptied.
+    #[test]
+    fn connecting_discards_bytes_from_before() {
+        let mut stream = SerialStream::new("no-such-port".to_string(), 115200).unwrap();
+        stream.buffer.push_str("#1,2.");
+        assert!(stream.connect().is_err());
+        assert!(stream.buffer.is_empty());
     }
 
     /// Configs written before frame_pattern existed must still load.

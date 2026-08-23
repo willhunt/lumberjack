@@ -26,7 +26,7 @@ fn main() -> Result<()> {
 
     // Record for a fixed time. Each device keeps its own sample interval from
     // the config, on its own thread.
-    daq.run_for(Duration::from_secs(2), &mut |event| {
+    daq.run_for(Duration::from_secs(10), &mut |event| {
         if let DeviceEvent::Problem { device, error } = event {
             eprintln!("    ! {}: {}", device, error);
         }
