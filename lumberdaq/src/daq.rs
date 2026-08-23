@@ -1,7 +1,7 @@
 use crate::{ Error, Result };
 use crate::config::{ DaqConfig, DeviceConfig };
 use crate::device::Device;
-use crate::storage::{ DaqHeader, DataSink };
+use crate::storage::DataSink;
 use serde::{ Deserialize, Serialize };
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -144,7 +144,7 @@ impl Daq {
     ///
     /// Daq does not know or care which format that is.
     pub fn set_sink(&mut self, mut sink: Box<dyn DataSink>) -> Result<()> {
-        sink.init(&DaqHeader::from_daq(self))?;
+        sink.init(&self.config())?;
         self.sink = Some(sink);
         Ok(())
     }

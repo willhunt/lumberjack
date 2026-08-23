@@ -3,6 +3,7 @@ use crate::daq::Daq;
 use crate::datapoint::DataPoint;
 use crate::device::{ Device, ConnectionStatus };
 use crate::hardware::Hardware;
+use crate::config::DaqConfig;
 use crate::storage::{ Batch, DaqHeader, DataSink };
 use crate::Result;
 use std::collections::HashMap;
@@ -33,8 +34,7 @@ pub fn check_file_extension(path: &std::path::PathBuf, extension: &OsStr) -> Res
 }
 
 pub fn write_json_file(path: &std::path::PathBuf, daq: &Daq) -> Result<()> {
-    let header = DaqHeader::from_daq(daq);
-    write_json_header(path, &header)
+    write_json_header(path, &DaqHeader::from_config(&daq.config()))
 }
 
 pub fn write_json_header(path: &Path, header: &DaqHeader) -> Result<()> {
@@ -88,8 +88,11 @@ impl CsvSink {
 }
 
 impl DataSink for CsvSink {
-    fn init(&mut self, header: &DaqHeader) -> Result<()> {
-        write_json_header(&self.json_path, header)?;
+    fn init(&mut self, config: &DaqConfig) -> Result<()> {
+        // The csv only needs the labels, so it flattens the setup and writes
+        // that. The hardware details are dropped, which is why a csv run cannot
+        // later say which port or frame index produced it.
+        write_json_header(&self.json_path, &DaqHeader::from_config(config))?;
         self.writer.write_record(&["Device", "Channel", "Timestamp", "Value"])?;
         self.flush()
     }

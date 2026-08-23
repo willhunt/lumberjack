@@ -1,4 +1,5 @@
-use crate::storage::{ Batch, DaqHeader, DataSink };
+use crate::config::DaqConfig;
+use crate::storage::{ Batch, DataSink };
 use crate::{ Error, Result };
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -13,25 +14,28 @@ use std::path::Path;
 ///
 /// ```text
 /// runs      one row per recording session: name, author, when it started
-/// devices   one row per device, belonging to a run
+/// devices   one row per device, with the hardware config it ran with
 /// channels  one row per channel, pointing at its device
 /// readings  channel_id, timestamp, value
 /// ```
 ///
 /// Because the description lives in the same file as the data, there is no
-/// sidecar to keep in step with it.
+/// sidecar to keep in step with it, and a results file can say what produced
+/// it without needing the config.json it was recorded next to.
 ///
 /// A database holds many runs rather than one. Recording again appends a new
 /// run instead of failing or overwriting, which is what a csv does today: it
 /// truncates, so a second run silently destroys the first.
 ///
+/// Devices and channels are deliberately *not* shared between runs even when
+/// their names match. A name is a label, not an identity: the same channel name
+/// can read a different frame index, a different port, or a different physical
+/// sensor. Storing each run's own rows keeps what that run actually believed,
+/// and the hardware column is there so two runs can be compared properly rather
+/// than assumed equal. Queries across runs match on name and still work.
+///
 /// Timestamps are stored as microseconds since the epoch rather than as text:
 /// smaller, and no string to format per row.
-/// Stamped into the file so a database written by a different version of the
-/// schema is refused with an explanation rather than a raw SQL error about a
-/// missing column. Bump it whenever the tables change.
-const SCHEMA_VERSION: i32 = 1;
-
 pub struct SqliteSink {
     connection: Connection,
     /// device name -> channel name -> row id, built once from the header so a
@@ -40,6 +44,11 @@ pub struct SqliteSink {
     /// Whether there is an open transaction waiting to be committed.
     uncommitted: bool,
 }
+
+/// Stamped into the file so a database written by a different version of the
+/// schema is refused with an explanation rather than a raw SQL error about a
+/// missing column. Bump it whenever the tables change.
+const SCHEMA_VERSION: i32 = 2;
 
 impl SqliteSink {
     pub fn new(path: &Path) -> Result<SqliteSink> {
@@ -107,7 +116,7 @@ impl SqliteSink {
 }
 
 impl DataSink for SqliteSink {
-    fn init(&mut self, header: &DaqHeader) -> Result<()> {
+    fn init(&mut self, config: &DaqConfig) -> Result<()> {
         self.check_schema_version()?;
         self.connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS runs (
@@ -124,11 +133,19 @@ impl DataSink for SqliteSink {
                  run_id      INTEGER NOT NULL REFERENCES runs(id),
                  name        TEXT NOT NULL,
                  description TEXT NOT NULL,
+                 -- The whole hardware configuration as json: port, baud rate,
+                 -- frame pattern, channel bindings. Names alone cannot say
+                 -- whether two runs measured the same thing; this can, and it
+                 -- makes a results file able to describe its own setup.
+                 hardware    TEXT NOT NULL,
                  UNIQUE(run_id, name)
              );
              CREATE TABLE IF NOT EXISTS channels (
                  id          INTEGER PRIMARY KEY,
                  device_id   INTEGER NOT NULL REFERENCES devices(id),
+                 -- What the hardware calls this channel: the frame index for a
+                 -- serial device, and whatever identifies an input elsewhere.
+                 hardware_id TEXT NOT NULL,
                  name        TEXT NOT NULL,
                  unit        TEXT NOT NULL,
                  description TEXT NOT NULL,
@@ -147,27 +164,30 @@ impl DataSink for SqliteSink {
         self.connection.execute(
             "INSERT INTO runs (name, author, started) VALUES (?1, ?2, ?3)",
             rusqlite::params![
-                header.info.name,
-                header.info.author,
+                config.info.name,
+                config.info.author,
                 chrono::Utc::now().to_rfc3339()
             ],
         )?;
         let run_id = self.connection.last_insert_rowid();
 
-        for device in header.devices.iter() {
+        for device in config.devices.iter() {
+            let hardware = serde_json::to_string(&device.hardware)?;
             self.connection.execute(
-                "INSERT INTO devices (run_id, name, description) VALUES (?1, ?2, ?3)",
-                rusqlite::params![run_id, device.info.name, device.info.description],
+                "INSERT INTO devices (run_id, name, description, hardware)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![run_id, device.info.name, device.info.description, hardware],
             )?;
             let device_id = self.connection.last_insert_rowid();
 
             let mut ids: HashMap<String, i64> = HashMap::new();
-            for channel in device.channels.iter() {
+            for channel in device.hardware.channel_infos().iter() {
                 self.connection.execute(
-                    "INSERT INTO channels (device_id, name, unit, description)
-                     VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT INTO channels (device_id, hardware_id, name, unit, description)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
                     rusqlite::params![
                         device_id,
+                        channel.id,
                         channel.name,
                         channel.unit,
                         channel.description
@@ -232,25 +252,43 @@ impl Drop for SqliteSink {
 mod tests {
     use super::*;
     use crate::channel::ChannelInfo;
+    use crate::config::DeviceConfig;
     use crate::daq::DaqInfo;
     use crate::datapoint::DataPoint;
-    use crate::storage::DeviceHeader;
     use crate::device::DeviceInfo;
+    use crate::hardware::HardwareConfig;
+    use crate::hardware::serial_stream::{ SerialStreamChannel, SerialStreamConfig };
 
-    fn header() -> DaqHeader {
-        DaqHeader {
+    /// A serial device on COM3 with one channel reading frame index 1.
+    fn header() -> DaqConfig {
+        config_on_port("COM3", 1)
+    }
+
+    /// The same setup, but parameterised on the details that decide whether two
+    /// runs actually measured the same thing.
+    fn config_on_port(port: &str, index: i64) -> DaqConfig {
+        DaqConfig {
             info: DaqInfo { name: "Test".to_string(), author: "Nobody".to_string() },
-            devices: vec![DeviceHeader {
+            devices: vec![DeviceConfig {
                 info: DeviceInfo {
                     name: "Serial test device".to_string(),
                     description: "-".to_string(),
                 },
-                channels: vec![ChannelInfo {
-                    id: "1".to_string(),
-                    name: "Pressure".to_string(),
-                    unit: "Pa".to_string(),
+                hardware: HardwareConfig::SerialStream(SerialStreamConfig {
                     description: "-".to_string(),
-                }],
+                    port: port.to_string(),
+                    baudrate: 115200,
+                    frame_pattern: r"#([^#$]*)\$".to_string(),
+                    channels: vec![SerialStreamChannel {
+                        info: ChannelInfo {
+                            id: index.to_string(),
+                            name: "Pressure".to_string(),
+                            unit: "Pa".to_string(),
+                            description: "-".to_string(),
+                        },
+                        index: index,
+                    }],
+                }),
             }],
         }
     }
@@ -383,6 +421,66 @@ mod tests {
         assert_eq!(per_run, vec![(1, 2), (2, 1)]);
     }
 
+    /// The hardware binding is recorded, not just the label. For a serial
+    /// device that is the frame index, which is what decides what a channel
+    /// physically reads.
+    #[test]
+    fn the_hardware_binding_is_recorded_next_to_the_label() {
+        let dir = temp_dir("sqlite_binding");
+        let sink = sink_in(&dir);
+        let (hardware_id, name): (String, String) = sink
+            .connection
+            .query_row("SELECT hardware_id, name FROM channels", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(name, "Pressure");
+        assert_eq!(hardware_id, "1");
+    }
+
+    /// The point of storing the config: two runs whose channels share a name
+    /// can still be told apart, because the port and the frame index are there
+    /// to compare. Merging them on name alone would have hidden this.
+    #[test]
+    fn two_runs_with_matching_names_can_still_be_told_apart() {
+        let dir = temp_dir("sqlite_provenance");
+        let path = dir.join("results.db");
+
+        let mut first = SqliteSink::new(&path).unwrap();
+        first.init(&config_on_port("COM3", 1)).unwrap();
+        drop(first);
+
+        // Same device name, same channel name, same unit. Different port, and
+        // reading a different field of the frame: a different measurement.
+        let mut second = SqliteSink::new(&path).unwrap();
+        second.init(&config_on_port("COM4", 2)).unwrap();
+
+        let configs: Vec<String> = second
+            .connection
+            .prepare("SELECT hardware FROM devices ORDER BY run_id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        assert_eq!(configs.len(), 2);
+        assert!(configs[0].contains("COM3"));
+        assert!(configs[1].contains("COM4"));
+        assert_ne!(configs[0], configs[1]);
+
+        // And the labels really are identical, which is exactly why comparing
+        // on names would have called these the same channel.
+        let names: Vec<String> = second
+            .connection
+            .prepare("SELECT name FROM channels")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        assert_eq!(names, vec!["Pressure".to_string(), "Pressure".to_string()]);
+    }
+
     /// A database from an older schema should say so, rather than failing later
     /// with a complaint about a missing column.
     #[test]
@@ -398,7 +496,7 @@ mod tests {
         let mut sink = SqliteSink::new(&path).unwrap();
         assert!(matches!(
             sink.init(&header()),
-            Err(Error::DatabaseSchemaVersion { found: 0, expected: 1 })
+            Err(Error::DatabaseSchemaVersion { found: 0, expected: SCHEMA_VERSION })
         ));
     }
 

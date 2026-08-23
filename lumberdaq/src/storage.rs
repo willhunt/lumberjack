@@ -1,6 +1,7 @@
 use crate::Result;
 use crate::channel::ChannelInfo;
-use crate::daq::{ Daq, DaqInfo };
+use crate::config::DaqConfig;
+use crate::daq::DaqInfo;
 use crate::datapoint::DataPoint;
 use crate::device::DeviceInfo;
 use serde::{ Deserialize, Serialize };
@@ -28,14 +29,15 @@ pub struct DaqHeader {
 }
 
 impl DaqHeader {
-    /// Take a metadata snapshot of a running Daq, leaving the Daq untouched.
-    pub fn from_daq(daq: &Daq) -> DaqHeader {
+    /// Flatten a setup into the shape the csv sidecar wants: names and units,
+    /// with the hardware details left out.
+    pub fn from_config(config: &DaqConfig) -> DaqHeader {
         DaqHeader {
-            info: daq.info.clone(),
-            devices: daq.devices.iter().map(|device|
+            info: config.info.clone(),
+            devices: config.devices.iter().map(|device|
                 DeviceHeader {
                     info: device.info.clone(),
-                    channels: device.channels.iter().map(|channel| channel.info.clone()).collect(),
+                    channels: device.hardware.channel_infos(),
                 }
             ).collect(),
         }
@@ -56,7 +58,13 @@ pub struct Batch {
 /// changing anything that produces data.
 pub trait DataSink {
     /// Called once before any data, to record what is being measured.
-    fn init(&mut self, header: &DaqHeader) -> Result<()>;
+    ///
+    /// This takes the whole setup rather than a flattened header. Names and
+    /// units are enough to label a column, but not enough to say whether two
+    /// runs measured the same thing: that needs the port, the baud rate and
+    /// which field of the frame each channel reads. A sink that only wants the
+    /// labels can call `DaqHeader::from_config`.
+    fn init(&mut self, config: &DaqConfig) -> Result<()>;
 
     /// Write one channel's worth of acquired data.
     ///
