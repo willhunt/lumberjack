@@ -1,0 +1,21 @@
+{
+  "info": { "name": "Mock sine", "author": "Will Hunt" },
+  "storage": "sqlite",
+  "devices": [
+    {
+      "info": { "name": "Signal generator", "description": "No hardware attached" },
+      "sample_interval_ms": 1000,
+      "hardware": {
+        "type": "MockHardware",
+        "description": "Mock streaming device",
+        "acquisition": { "mode": "streaming", "interval_ms": 10 },
+        "channels": [
+          { "name": "Sine 1Hz", "unit": "-", "description": "-",
+            "input": { "Sine": { "frequency_hz": 1.0 } } },
+          { "name": "Sine 5Hz", "unit": "-", "description": "-",
+            "input": { "Sine": { "frequency_hz": 5.0 } } }
+        ]
+      }
+    }
+  ]
+}
