@@ -1,0 +1,43 @@
+{
+  "info": {
+    "name": "ADC-20 streaming",
+    "author": "Will Hunt"
+  },
+  "storage": "sqlite",
+  "devices": [
+    {
+      "info": {
+        "name": "ADC-20",
+        "description": "Pico high resolution logger"
+      },
+      "sample_interval_ms": 1000,
+      "hardware": {
+        "type": "PicoHrdl",
+        "description": "Pico Technology ADC-20",
+        "conversion_time": "ms60",
+        "mains_sixty_hertz": false,
+        "channels": [
+          {
+            "name": "Input 1",
+            "unit": "V",
+            "description": "Analog input 1, single ended",
+            "channel": 1,
+            "range": "milli_volts2500"
+          },
+          {
+            "name": "Input 2",
+            "unit": "V",
+            "description": "Analog input 2, single ended",
+            "channel": 2,
+            "range": "milli_volts2500"
+          }
+        ],
+        "acquisition": {
+          "mode": "streaming",
+          "interval_ms": 200,
+          "buffer_scans": 1000
+        }
+      }
+    }
+  ]
+}

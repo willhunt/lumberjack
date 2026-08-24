@@ -19,6 +19,55 @@ use std::time::Duration;
 /// eight channel scan is read most of a second after the first, and pretending
 /// otherwise would put a lie in the results.
 
+/// How samples are taken from the unit.
+///
+/// The difference is who decides when a sample happens. Polled means we ask and
+/// the unit converts, one value per channel per ask. Streaming means the unit
+/// keeps its own schedule and we drain what it produced.
+///
+/// Streaming is better wherever it fits, for two measured reasons. Every scan
+/// carries the time the *unit* took it, so lateness in getting round to draining
+/// does not become timestamp error. And there is no per channel switching cost:
+/// polled reads of a second channel measured 114ms against a 60ms conversion,
+/// because the driver re-selects the input each time, where a streaming unit
+/// sweeps them itself.
+///
+/// Polled is kept because it needs no interval agreed up front, which makes it
+/// the simpler thing to reach for when checking a rig.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum Acquisition {
+    /// Ask for one value per channel, waiting for each conversion.
+    Polled,
+    /// Let the unit scan on its own schedule and take what it produced.
+    Streaming {
+        /// How often the unit takes a complete scan of every channel.
+        ///
+        /// Not the same as the device's `sample_interval_ms`, which becomes how
+        /// often we *drain*. Draining slower than this simply returns more
+        /// scans at a time, which is the point.
+        interval_ms: u64,
+        /// How many scans the driver buffers behind us.
+        ///
+        /// What bounds how long a reader can be away before samples are lost,
+        /// so it wants to hold comfortably more than one drain's worth.
+        #[serde(default = "default_buffer_scans")]
+        buffer_scans: u32,
+    },
+}
+
+impl Default for Acquisition {
+    /// Polled, so a config written before this setting existed keeps behaving
+    /// exactly as it did.
+    fn default() -> Acquisition {
+        Acquisition::Polled
+    }
+}
+
+fn default_buffer_scans() -> u32 {
+    1000
+}
+
 /// Everything needed to describe an ADC-20/24 in a config file.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct PicoHrdlConfig {
@@ -30,6 +79,8 @@ pub struct PicoHrdlConfig {
     /// Reject 60Hz mains hum rather than 50Hz.
     #[serde(default)]
     pub mains_sixty_hertz: bool,
+    #[serde(default)]
+    pub acquisition: Acquisition,
     pub channels: Vec<PicoHrdlChannel>,
 }
 
@@ -60,6 +111,12 @@ pub struct PicoHrdl {
     /// connect. Needed to turn counts into volts, and it varies with the
     /// conversion time, so it cannot be a constant.
     full_scale_counts: Vec<i32>,
+    /// Wall clock at the moment streaming began.
+    ///
+    /// The unit timestamps its scans from the start of the run, so this is what
+    /// turns those into real times. Taken once, so every scan in a run is
+    /// placed against the same origin rather than against whenever we drained.
+    stream_started: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl PicoHrdl {
@@ -68,6 +125,7 @@ impl PicoHrdl {
             description: "Pico Technology high resolution data logger.".to_string(),
             conversion_time: ConversionTime::default(),
             mains_sixty_hertz: false,
+            acquisition: Acquisition::default(),
             channels: vec![],
         })
     }
@@ -77,6 +135,7 @@ impl PicoHrdl {
             config: config,
             unit: None,
             full_scale_counts: vec![],
+            stream_started: None,
         })
     }
 
@@ -119,6 +178,18 @@ impl DeviceInterface for PicoHrdl {
             full_scale_counts.push(maximum);
         }
 
+        // Streaming has to be told its schedule before it starts. The driver
+        // refuses an interval too short for the channels to convert in, which
+        // arrives here as ConversionTimeTooSlow rather than as a device that
+        // quietly runs late.
+        if let Acquisition::Streaming { interval_ms, buffer_scans } = self.config.acquisition {
+            unit.set_interval(Duration::from_millis(interval_ms), self.config.conversion_time)?;
+            unit.start_streaming(buffer_scans)?;
+            // Taken after the call that starts the clock, so a scan at unit
+            // time zero maps to roughly now rather than to before the run.
+            self.stream_started = Some(chrono::Utc::now());
+        }
+
         self.full_scale_counts = full_scale_counts;
         self.unit = Some(unit);
         Ok(())
@@ -132,23 +203,59 @@ impl HardwareDataAquisition for PicoHrdl {
             None => return Err(Error::NoHardware),
         };
 
-        let mut readings: Vec<Vec<DataPoint>> = Vec::with_capacity(self.config.channels.len());
-        for (channel, full_scale) in self.config.channels.iter().zip(self.full_scale_counts.iter())
-        {
-            let reading = unit.read_single(
-                channel.channel,
-                channel.range,
-                self.config.conversion_time,
-                channel.single_ended,
-            )?;
-            readings.push(vec![DataPoint {
-                // Stamped per channel, after its own conversion, because that
-                // is when this value was actually measured.
-                datetime: chrono::Utc::now(),
-                value: counts_to_volts(reading.counts, *full_scale, channel.range),
-            }]);
+        match self.config.acquisition {
+            Acquisition::Polled => {
+                let mut readings: Vec<Vec<DataPoint>> =
+                    Vec::with_capacity(self.config.channels.len());
+                for (channel, full_scale) in
+                    self.config.channels.iter().zip(self.full_scale_counts.iter())
+                {
+                    let reading = unit.read_single(
+                        channel.channel,
+                        channel.range,
+                        self.config.conversion_time,
+                        channel.single_ended,
+                    )?;
+                    readings.push(vec![DataPoint {
+                        // Stamped per channel, after its own conversion,
+                        // because that is when this value was measured.
+                        datetime: chrono::Utc::now(),
+                        value: counts_to_volts(reading.counts, *full_scale, channel.range),
+                    }]);
+                }
+                Ok(readings)
+            }
+            Acquisition::Streaming { buffer_scans, .. } => {
+                let started = match self.stream_started {
+                    Some(started) => started,
+                    None => return Err(Error::NoHardware),
+                };
+                let channel_count = self.config.channels.len();
+                let scans = unit.take_scans(channel_count, buffer_scans as usize)?;
+
+                // One vec per channel whether or not anything arrived, so the
+                // shape matches the channel list even on an empty drain.
+                let mut readings: Vec<Vec<DataPoint>> = vec![Vec::new(); channel_count];
+                for scan in scans.iter() {
+                    // The unit's own time, not ours. A late drain moves when we
+                    // hear about a scan, never when it says it happened.
+                    let datetime = started
+                        + chrono::Duration::milliseconds(scan.since_start.as_millis() as i64);
+                    for (index, counts) in scan.counts.iter().enumerate() {
+                        let channel = &self.config.channels[index];
+                        readings[index].push(DataPoint {
+                            datetime: datetime,
+                            value: counts_to_volts(
+                                *counts,
+                                self.full_scale_counts[index],
+                                channel.range,
+                            ),
+                        });
+                    }
+                }
+                Ok(readings)
+            }
         }
-        Ok(readings)
     }
 }
 
@@ -196,6 +303,7 @@ mod tests {
             description: "-".to_string(),
             conversion_time: conversion,
             mains_sixty_hertz: false,
+            acquisition: Acquisition::Polled,
             channels: (0..channels)
                 .map(|index| PicoHrdlChannel {
                     info: ChannelInfo {
@@ -264,6 +372,58 @@ mod tests {
         assert_eq!(config.channels[0].channel, 3);
         assert_eq!(config.channels[0].range, VoltageRange::MilliVolts625);
         assert!(!config.channels[0].single_ended);
+    }
+
+    /// A config written before acquisition existed must keep polling, which is
+    /// what it was doing.
+    #[test]
+    fn acquisition_defaults_to_polled() {
+        let json = r#"{
+            "description": "ADC-20",
+            "channels": []
+        }"#;
+        let config: PicoHrdlConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.acquisition, Acquisition::Polled);
+    }
+
+    /// The mode carries its own settings, so nothing has fields that only
+    /// apply sometimes.
+    #[test]
+    fn streaming_carries_its_own_settings() {
+        let json = r#"{
+            "description": "ADC-20",
+            "acquisition": { "mode": "streaming", "interval_ms": 200, "buffer_scans": 500 },
+            "channels": []
+        }"#;
+        let config: PicoHrdlConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.acquisition,
+            Acquisition::Streaming { interval_ms: 200, buffer_scans: 500 }
+        );
+    }
+
+    #[test]
+    fn a_streaming_config_need_not_size_the_buffer() {
+        let json = r#"{
+            "description": "ADC-20",
+            "acquisition": { "mode": "streaming", "interval_ms": 100 },
+            "channels": []
+        }"#;
+        let config: PicoHrdlConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.acquisition,
+            Acquisition::Streaming { interval_ms: 100, buffer_scans: default_buffer_scans() }
+        );
+    }
+
+    /// Streaming before connecting has no origin to place scans against, so it
+    /// must refuse rather than invent one.
+    #[test]
+    fn streaming_before_connecting_is_rejected() {
+        let mut config = config_with(1, ConversionTime::Ms60);
+        config.acquisition = Acquisition::Streaming { interval_ms: 200, buffer_scans: 100 };
+        let mut device = PicoHrdl::from_config(config).unwrap();
+        assert!(matches!(device.read(), Err(Error::NoHardware)));
     }
 
     /// Most inputs are single ended, so a config should not have to say so.
