@@ -6,6 +6,7 @@
 
 use crate::raw::hrdl::PicoHrdl;
 use std::fmt;
+use std::time::Duration;
 
 /// Where to look for the driver, in order.
 ///
@@ -270,6 +271,20 @@ pub struct Reading {
     pub overflow: bool,
 }
 
+/// One complete sweep of the enabled channels, taken by the unit itself.
+#[derive(Debug, Clone)]
+pub struct Scan {
+    /// When the unit took this scan, measured from the start of streaming.
+    ///
+    /// The unit's own clock rather than ours, so it does not inherit any
+    /// lateness in when we got round to draining the buffer.
+    pub since_start: Duration,
+    /// Raw counts, one per enabled channel, in the order they were enabled.
+    pub counts: Vec<i32>,
+    /// An input went outside its range during this drain.
+    pub overflow: bool,
+}
+
 /// An open ADC-20 or ADC-24.
 ///
 /// Closing is handled by `Drop`, so a unit cannot be left open by an early
@@ -319,6 +334,11 @@ impl Hrdl {
             HRDLSetMains,
             HRDLGetMinMaxAdcCounts,
             HRDLGetSingleValue,
+            HRDLSetInterval,
+            HRDLRun,
+            HRDLReady,
+            HRDLStop,
+            HRDLGetTimesAndValues,
         );
 
         // SAFETY: takes no arguments and returns a handle by value.
@@ -423,6 +443,106 @@ impl Hrdl {
         Ok(Reading { counts: value, overflow: overflow != 0 })
     }
 
+
+    // -- Streaming ----------------------------------------------------------
+    //
+    // The alternative to asking for one value at a time. The unit scans on its
+    // own schedule into a driver side buffer, and we drain it. Two things come
+    // out of that which single shot cannot give: every sample carries the time
+    // the *unit* took it, and there is no per call cost for switching input,
+    // because the unit is sweeping the channels itself.
+
+    /// How often the unit should take a complete scan, and how long each
+    /// channel converts for.
+    ///
+    /// The driver rejects an interval too short for the conversion time and
+    /// channel count, which surfaces here as `ConversionTimeTooSlow`.
+    pub fn set_interval(&mut self, interval: Duration, conversion: ConversionTime) -> Result<()> {
+        // SAFETY: three integers by value.
+        let result = unsafe {
+            self.api.HRDLSetInterval(
+                self.handle,
+                interval.as_millis() as i32,
+                conversion.as_raw(),
+            )
+        };
+        if result == FAILED {
+            return Err(self.failure("HRDLSetInterval"));
+        }
+        Ok(())
+    }
+
+    /// Begin streaming into a buffer of `buffer_scans` complete scans.
+    ///
+    /// The buffer is what bounds how long a reader can be away before samples
+    /// are lost, so it should hold comfortably more than one drain's worth.
+    pub fn start_streaming(&mut self, buffer_scans: u32) -> Result<()> {
+        // SAFETY: three integers by value. HRDL_BM_STREAM is 2.
+        let result = unsafe { self.api.HRDLRun(self.handle, buffer_scans as i32, 2) };
+        if result == FAILED {
+            return Err(self.failure("HRDLRun"));
+        }
+        Ok(())
+    }
+
+    /// Whether the unit has finished starting up and has samples to give.
+    pub fn ready(&self) -> bool {
+        // SAFETY: one integer by value.
+        unsafe { self.api.HRDLReady(self.handle) != 0 }
+    }
+
+    /// Take whatever the unit has collected since the last call.
+    ///
+    /// Returns at most `max_scans`. An empty result is normal rather than an
+    /// error: it means nothing new has been converted yet.
+    ///
+    /// `channel_count` must be the number of channels actually enabled. The
+    /// driver interleaves the buffer by scan, so getting this wrong would
+    /// silently shear the values across channels.
+    pub fn take_scans(&self, channel_count: usize, max_scans: usize) -> Result<Vec<Scan>> {
+        if channel_count == 0 || max_scans == 0 {
+            return Ok(Vec::new());
+        }
+        let mut times = vec![0i32; max_scans];
+        let mut values = vec![0i32; max_scans * channel_count];
+        let mut overflow: i16 = 0;
+
+        // SAFETY: both buffers are sized for max_scans as promised by the last
+        // argument, and outlive the call.
+        let collected = unsafe {
+            self.api.HRDLGetTimesAndValues(
+                self.handle,
+                times.as_mut_ptr(),
+                values.as_mut_ptr(),
+                &mut overflow,
+                max_scans as i32,
+            )
+        };
+        if collected < 0 {
+            return Err(self.failure("HRDLGetTimesAndValues"));
+        }
+
+        // The driver reports one overflow flag for the whole drain rather than
+        // per scan, so it applies to all of them or none.
+        let overflowed = overflow != 0;
+        let mut scans = Vec::with_capacity(collected as usize);
+        for index in 0..collected as usize {
+            let start = index * channel_count;
+            scans.push(Scan {
+                since_start: Duration::from_millis(times[index].max(0) as u64),
+                counts: values[start..start + channel_count].to_vec(),
+                overflow: overflowed,
+            });
+        }
+        Ok(scans)
+    }
+
+    /// Stop streaming. Safe to call whether or not it was started.
+    pub fn stop(&mut self) {
+        // SAFETY: one integer by value, and this one returns nothing.
+        unsafe { self.api.HRDLStop(self.handle) }
+    }
+
     /// Ask the driver what went wrong with the last call.
     fn failure(&self, operation: &'static str) -> Error {
         Error::Failed {
@@ -470,7 +590,10 @@ impl Hrdl {
 impl Drop for Hrdl {
     fn drop(&mut self) {
         // SAFETY: the handle came from HRDLOpenUnit and is closed once, here.
+        // Stopping first so the unit is not left converting into a buffer
+        // nobody will read.
         unsafe {
+            self.api.HRDLStop(self.handle);
             self.api.HRDLCloseUnit(self.handle);
         }
     }
