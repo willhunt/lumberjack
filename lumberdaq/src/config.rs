@@ -1,4 +1,4 @@
-use crate::calculated::CalculatedDevice;
+use crate::calculated::{ CalculatedDevice, ChannelRef };
 use crate::daq::DaqInfo;
 use crate::device::DeviceInfo;
 use crate::hardware::HardwareConfig;
@@ -71,4 +71,24 @@ pub struct DaqConfig {
     /// as a device because that is what it is to anyone reading them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calculated: Option<CalculatedDevice>,
+}
+
+impl DaqConfig {
+    /// Every measured channel, in the form an equation refers to one.
+    ///
+    /// What a user interface offers when someone is choosing an input for a
+    /// calculated channel, so the choice comes from the setup rather than from
+    /// them typing a device and channel name correctly.
+    pub fn available_inputs(&self) -> Vec<ChannelRef> {
+        let mut inputs = Vec::new();
+        for device in self.devices.iter() {
+            for channel in device.hardware.channel_infos() {
+                inputs.push(ChannelRef {
+                    device: device.info.name.clone(),
+                    channel: channel.name,
+                });
+            }
+        }
+        inputs
+    }
 }

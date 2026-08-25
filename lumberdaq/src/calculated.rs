@@ -51,6 +51,20 @@ pub struct CalculatedChannel {
     pub equation: String,
 }
 
+impl CalculatedChannel {
+    /// Check this channel on its own, without building a whole calculator.
+    ///
+    /// Equations are strings read at run time, so a program embedding this can
+    /// let someone write one while it is running: a UI can call this as they
+    /// type and say what is wrong before anything is recorded. Nothing about an
+    /// equation is fixed when lumberdaq is built.
+    ///
+    /// The same checks a run would make, so passing here means it will build.
+    pub fn validate(&self) -> Result<()> {
+        compile(self).map(|_| ())
+    }
+}
+
 /// The device calculated channels belong to.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct CalculatedDevice {
@@ -120,7 +134,7 @@ impl Calculator {
                 continue;
             }
 
-            let mut context = Context::new();
+            let mut context = fresh_context();
             let mut datapoints: Vec<DataPoint> = Vec::with_capacity(batch.datapoints.len());
             let mut skipped = 0usize;
             let mut first_failure: Option<String> = None;
@@ -167,6 +181,42 @@ impl Calculator {
     }
 }
 
+/// A context with the usual maths available under its usual name.
+///
+/// evalexpr provides these as `math::sqrt` and so on. Someone typing an
+/// equation into a box expects `sqrt(dp)`, not `math::sqrt(dp)`, so the plain
+/// names are bound here as well. The prefixed forms keep working.
+fn fresh_context() -> Context {
+    use evalexpr::ContextWithMutableFunctions;
+    let mut context = Context::new();
+    let unary: [(&str, fn(f64) -> f64); 12] = [
+        ("sqrt", f64::sqrt),
+        ("abs", f64::abs),
+        ("ln", f64::ln),
+        ("log10", f64::log10),
+        ("exp", f64::exp),
+        ("sin", f64::sin),
+        ("cos", f64::cos),
+        ("tan", f64::tan),
+        ("asin", f64::asin),
+        ("acos", f64::acos),
+        ("atan", f64::atan),
+        ("round", f64::round),
+    ];
+    for (name, function) in unary {
+        // set_function only fails on a name that is not a valid identifier, and
+        // these are all literals, so there is nothing to handle.
+        let _ = context.set_function(
+            name.to_string(),
+            evalexpr::Function::new(move |argument| {
+                let value = argument.as_number()?;
+                Ok(evalexpr::Value::from_float(function(value)))
+            }),
+        );
+    }
+    context
+}
+
 fn channel_equation(config: &CalculatedDevice, name: &str) -> String {
     config
         .channels
@@ -202,7 +252,7 @@ fn compile(channel: &CalculatedChannel) -> Result<Compiled> {
     // empty equation all build perfectly well and fail when evaluated, which
     // would mean failing on every sample of a run that had already started.
     // So try it once here, with a stand-in value.
-    let mut trial = Context::new();
+    let mut trial = fresh_context();
     for variable in channel.inputs.keys() {
         use evalexpr::ContextWithMutableVariables;
         trial
@@ -455,6 +505,32 @@ mod tests {
         assert_eq!(problems, 1);
         let values: Vec<f64> = produced[0].datapoints.iter().map(|point| point.value).collect();
         assert_eq!(values, vec![1.0, 0.25]);
+    }
+
+    /// evalexpr namespaces these as math::sqrt. Someone typing into a box in a
+    /// user interface will write sqrt, so both have to work.
+    #[test]
+    fn the_usual_maths_works_under_its_usual_name() {
+        let mut calc = calculator(vec![
+            channel("Root", "sqrt(v)", &[("v", "D", "C")]),
+            channel("Namespaced", "math::sqrt(v)", &[("v", "D", "C")]),
+            channel("Magnitude", "abs(0 - v)", &[("v", "D", "C")]),
+        ])
+        .unwrap();
+        let produced = calc.apply(&batch("D", "C", &[9.0]), &mut ignore);
+        let values: Vec<f64> = produced.iter().map(|b| b.datapoints[0].value).collect();
+        assert_eq!(values, vec![3.0, 3.0, 9.0]);
+    }
+
+    /// The check a user interface would run behind a text box, on an equation
+    /// that did not exist when this was built.
+    #[test]
+    fn an_equation_can_be_checked_on_its_own() {
+        let good = channel("X", "sqrt(v) * 2", &[("v", "D", "C")]);
+        assert!(good.validate().is_ok());
+
+        let bad = channel("X", "v * (2", &[("v", "D", "C")]);
+        assert!(bad.validate().is_err());
     }
 
     #[test]
