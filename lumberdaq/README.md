@@ -85,15 +85,60 @@ today and another tomorrow and end up with half its data in each.
 | `"sqlite"` | Default. One file holding the setup and every run. Readable while recording, so a plot can watch a run in progress. Recording again appends a run rather than overwriting. |
 | `"csv"` | Long format, plus a json sidecar. Readable by anything, and a run that dies halfway still leaves a usable file. Recording again **overwrites**. |
 
-Each device has its own `read_interval_ms` and is read on its own thread, so a
-slow device does not hold up a fast one.
+Each device is read on its own thread, so a slow device does not hold up a fast
+one.
 
-That is a *collection* rate, not a sample rate. For a device that is polled the
-two are the same, because a read takes a sample. For one that samples on its own
-schedule - a Pico set to stream, or anything on a serial port - it only decides
-how often results are gathered up for saving. How fast it samples is the
-hardware's own setting, and the timestamps come from the device or from when the
-data arrived, so they are the same whatever this is set to.
+### Rates
+
+Two different things get called a rate, and only one of them is about the data.
+
+**`read_interval_ms`**, on the device, is how often lumberdaq collects from it.
+It defaults to 100 ms and usually needs no thought. It is *not* how often the
+data is saved: that happens on its own one second timer regardless.
+
+**Sample rate** is how fast the hardware measures. It only appears as a setting
+where we can actually command the instrument:
+
+| device | who sets the sample rate | setting |
+|---|---|---|
+| Pico, polled | us, implicitly: a read *is* a sample | `read_interval_ms` |
+| Pico, streaming | us, explicitly: the unit is told to scan at this rate | `acquisition.sample_interval_ms` |
+| Mock, streaming | us, for a simulated device | `acquisition.sample_interval_ms` |
+| Serial | **the device. There is no setting, because we cannot change it** | none |
+
+So for a polled Pico, `read_interval_ms` really is your sample rate. For anything
+that samples on its own schedule it is only a collection rate: it changes how
+promptly data reaches disk, and nothing about the data. Set it slower on a serial
+device and you get exactly the same samples with exactly the same timestamps, in
+larger batches, later.
+
+That is why timestamps are trustworthy whatever it is set to. They come from the
+instrument for a streaming Pico, from the schedule for a streaming mock, and from
+when the bytes arrived for serial - never from when we happened to collect.
+
+### What happens when
+
+```
+device  --read_interval_ms-->  batches  --channel-->  sink  --1 s-->  disk
+        per device, default 100ms       immediately          fixed
+```
+
+## Test projects
+
+Four setups under `test_projects/`, each showing one thing:
+
+| | needs hardware | shows |
+|---|---|---|
+| `mock_sine` | no | streaming with nothing plugged in. Two sine channels sampled at 100 Hz, collected far more slowly. The values can be checked against the wave they claim to be. |
+| `simulated_and_serial_devices` | a serial device on COM3 | a mock and a real device in one run, at different rates, on their own threads |
+| `pico_adc20` | ADC-20 or ADC-24 | polled acquisition, where `read_interval_ms` is the sample rate |
+| `pico_adc20_stream` | ADC-20 or ADC-24 | the same unit told to scan itself, so samples carry the unit's own timestamps |
+
+`mock_sine` is the one to run first, since it needs nothing attached:
+
+```cmd
+cargo run -- test_projects/mock_sine
+```
 
 ## Development
 
