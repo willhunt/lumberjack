@@ -274,7 +274,7 @@ mod tests {
                     name: "Serial test device".to_string(),
                     description: "-".to_string(),
                 },
-                sample_interval_ms: 100,
+                read_interval_ms: 100,
                 hardware: HardwareConfig::SerialStream(SerialStreamConfig {
                     description: "-".to_string(),
                     port: port.to_string(),

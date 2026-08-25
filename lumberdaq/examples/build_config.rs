@@ -48,8 +48,8 @@ fn main() -> Result<()> {
     )?;
 
     // Deliberately different rates, since each device reads on its own thread.
-    mock.sample_interval = Duration::from_millis(500);
-    serial.sample_interval = Duration::from_millis(100);
+    mock.read_interval = Duration::from_millis(500);
+    serial.read_interval = Duration::from_millis(100);
 
     let daq = Daq::new(
         "Example measurement".to_string(),

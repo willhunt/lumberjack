@@ -10,7 +10,6 @@
         "name": "Serial test device",
         "description": "Device streaming over serial."
       },
-      "sample_interval_ms": 1000,
       "hardware": {
         "type": "SerialStream",
         "description": "Device streaming over serial.",
@@ -31,7 +30,8 @@
             "index": 3
           }
         ]
-      }
+      },
+      "read_interval_ms": 1000
     }
   ]
 }

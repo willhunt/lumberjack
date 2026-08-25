@@ -170,8 +170,8 @@ pub fn read_results(csv_path: &std::path::PathBuf, json_path: &std::path::PathBu
         }
         let device = Device {
             info: device_header.info.clone(),
-            sample_interval: std::time::Duration::from_millis(
-                crate::config::default_sample_interval_ms(),
+            read_interval: std::time::Duration::from_millis(
+                crate::config::default_read_interval_ms(),
             ),
             channels: channels,
             hardware: Hardware::None,

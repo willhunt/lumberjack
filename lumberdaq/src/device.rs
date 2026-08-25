@@ -1,6 +1,6 @@
 use crate::{ Error, Result };
 use crate::channel::Channel;
-use crate::config::{ default_sample_interval_ms, DeviceConfig };
+use crate::config::{ default_read_interval_ms, DeviceConfig };
 use crate::hardware::{ Hardware, HardwareDataAquisition };
 use crate::storage::{ Batch, DataSink };
 use serde::{Deserialize, Serialize};
@@ -60,7 +60,7 @@ fn retry_due(status: &ConnectionStatus) -> bool {
 pub struct Device {
     pub info: DeviceInfo,
     /// How often this device's thread reads it.
-    pub sample_interval: Duration,
+    pub read_interval: Duration,
     pub channels: Vec<Channel>,
     pub hardware: Hardware,
     pub connection: ConnectionStatus,
@@ -74,7 +74,7 @@ impl Device {
     pub fn from_config(config: DeviceConfig) -> Result<Device> {
         let mut device = Device {
             info: config.info,
-            sample_interval: Duration::from_millis(config.sample_interval_ms),
+            read_interval: Duration::from_millis(config.read_interval_ms),
             channels: vec![],
             hardware: Hardware::from_config(config.hardware)?,
             connection: ConnectionStatus::default(),
@@ -90,7 +90,7 @@ impl Device {
     pub fn config(&self) -> DeviceConfig {
         DeviceConfig {
             info: self.info.clone(),
-            sample_interval_ms: self.sample_interval.as_millis() as u64,
+            read_interval_ms: self.read_interval.as_millis() as u64,
             hardware: self.hardware.config(),
         }
     }
@@ -114,7 +114,7 @@ impl Device {
                 name: name,
                 description: description,
             },
-            sample_interval: Duration::from_millis(default_sample_interval_ms()),
+            read_interval: Duration::from_millis(default_read_interval_ms()),
             channels: vec![],
             hardware: hardware,
             connection: ConnectionStatus::default(),

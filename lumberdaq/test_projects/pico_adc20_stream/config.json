@@ -10,7 +10,6 @@
         "name": "ADC-20",
         "description": "Pico high resolution logger"
       },
-      "sample_interval_ms": 1000,
       "hardware": {
         "type": "PicoHrdl",
         "description": "Pico Technology ADC-20",
@@ -34,10 +33,11 @@
         ],
         "acquisition": {
           "mode": "streaming",
-          "interval_ms": 200,
-          "buffer_scans": 1000
+          "buffer_scans": 1000,
+          "sample_interval_ms": 200
         }
-      }
+      },
+      "read_interval_ms": 1000
     }
   ]
 }

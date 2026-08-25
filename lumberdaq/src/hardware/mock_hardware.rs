@@ -33,7 +33,7 @@ pub enum Acquisition {
     /// Timestamps are computed from the schedule rather than from when the
     /// drain happened, so they come out exactly evenly spaced the way a real
     /// streaming instrument's do.
-    Streaming { interval_ms: u64 },
+    Streaming { sample_interval_ms: u64 },
 }
 
 impl Default for Acquisition {
@@ -110,7 +110,7 @@ impl MockHardware {
     ///
     /// Split out so it can be tested against a clock we control, rather than
     /// against whatever the machine happened to do.
-    fn scans_until(&mut self, now: DateTime<Utc>, interval_ms: u64) -> Vec<Vec<DataPoint>> {
+    fn scans_until(&mut self, now: DateTime<Utc>, sample_interval_ms: u64) -> Vec<Vec<DataPoint>> {
         let channel_count = self.config.channels.len();
         let mut readings: Vec<Vec<DataPoint>> = vec![Vec::new(); channel_count];
 
@@ -120,7 +120,7 @@ impl MockHardware {
         };
         // An interval of zero would owe infinitely many samples, so treat it as
         // the fastest the millisecond schedule can express.
-        let interval = chrono::Duration::milliseconds(interval_ms.max(1) as i64);
+        let interval = chrono::Duration::milliseconds(sample_interval_ms.max(1) as i64);
 
         let mut scan_time = self.next_scan.unwrap_or(started);
         let mut produced = 0usize;
@@ -178,8 +178,8 @@ impl HardwareDataAquisition for MockHardware {
                 }
                 Ok(readings)
             }
-            Acquisition::Streaming { interval_ms } => {
-                Ok(self.scans_until(Utc::now(), interval_ms))
+            Acquisition::Streaming { sample_interval_ms } => {
+                Ok(self.scans_until(Utc::now(), sample_interval_ms))
             }
         }
     }
@@ -311,7 +311,7 @@ mod tests {
     /// on whenever the drain happened.
     #[test]
     fn streaming_samples_are_evenly_spaced_however_late_the_drain() {
-        let mut device = sine_device(1.0, Acquisition::Streaming { interval_ms: 100 });
+        let mut device = sine_device(1.0, Acquisition::Streaming { sample_interval_ms: 100 });
         let started = Utc::now();
         device.started = Some(started);
         device.next_scan = Some(started);
@@ -332,7 +332,7 @@ mod tests {
     /// generated for a period when nobody was draining.
     #[test]
     fn a_backlog_carries_the_values_it_should_have_had() {
-        let mut device = sine_device(1.0, Acquisition::Streaming { interval_ms: 250 });
+        let mut device = sine_device(1.0, Acquisition::Streaming { sample_interval_ms: 250 });
         let started = Utc::now();
         device.started = Some(started);
         device.next_scan = Some(started);
@@ -355,7 +355,7 @@ mod tests {
     /// Nothing new since the last drain is normal, not an error.
     #[test]
     fn draining_twice_in_a_row_yields_nothing_the_second_time() {
-        let mut device = sine_device(1.0, Acquisition::Streaming { interval_ms: 100 });
+        let mut device = sine_device(1.0, Acquisition::Streaming { sample_interval_ms: 100 });
         let started = Utc::now();
         device.started = Some(started);
         device.next_scan = Some(started);
@@ -368,7 +368,7 @@ mod tests {
     /// An interval of zero owes infinitely many samples; it must not hang.
     #[test]
     fn a_zero_interval_does_not_generate_without_end() {
-        let mut device = sine_device(1.0, Acquisition::Streaming { interval_ms: 0 });
+        let mut device = sine_device(1.0, Acquisition::Streaming { sample_interval_ms: 0 });
         let started = Utc::now();
         device.started = Some(started);
         device.next_scan = Some(started);
@@ -400,14 +400,14 @@ mod tests {
     fn a_sine_channel_round_trips_through_a_config() {
         let json = r#"{
             "description": "Mock",
-            "acquisition": { "mode": "streaming", "interval_ms": 20 },
+            "acquisition": { "mode": "streaming", "sample_interval_ms": 20 },
             "channels": [
                 { "name": "Sine", "unit": "-", "description": "-",
                   "input": { "Sine": { "frequency_hz": 2.5 } } }
             ]
         }"#;
         let config: MockHardwareConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.acquisition, Acquisition::Streaming { interval_ms: 20 });
+        assert_eq!(config.acquisition, Acquisition::Streaming { sample_interval_ms: 20 });
         assert_eq!(
             config.channels[0].input,
             MockHardwareInput::Sine { frequency_hz: 2.5 }

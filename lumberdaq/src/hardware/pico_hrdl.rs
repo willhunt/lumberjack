@@ -46,7 +46,7 @@ pub enum Acquisition {
         /// Not the same as the device's `sample_interval_ms`, which becomes how
         /// often we *drain*. Draining slower than this simply returns more
         /// scans at a time, which is the point.
-        interval_ms: u64,
+        sample_interval_ms: u64,
         /// How many scans the driver buffers behind us.
         ///
         /// What bounds how long a reader can be away before samples are lost,
@@ -182,8 +182,8 @@ impl DeviceInterface for PicoHrdl {
         // refuses an interval too short for the channels to convert in, which
         // arrives here as ConversionTimeTooSlow rather than as a device that
         // quietly runs late.
-        if let Acquisition::Streaming { interval_ms, buffer_scans } = self.config.acquisition {
-            unit.set_interval(Duration::from_millis(interval_ms), self.config.conversion_time)?;
+        if let Acquisition::Streaming { sample_interval_ms, buffer_scans } = self.config.acquisition {
+            unit.set_interval(Duration::from_millis(sample_interval_ms), self.config.conversion_time)?;
             unit.start_streaming(buffer_scans)?;
             // Taken after the call that starts the clock, so a scan at unit
             // time zero maps to roughly now rather than to before the run.
@@ -392,13 +392,13 @@ mod tests {
     fn streaming_carries_its_own_settings() {
         let json = r#"{
             "description": "ADC-20",
-            "acquisition": { "mode": "streaming", "interval_ms": 200, "buffer_scans": 500 },
+            "acquisition": { "mode": "streaming", "sample_interval_ms": 200, "buffer_scans": 500 },
             "channels": []
         }"#;
         let config: PicoHrdlConfig = serde_json::from_str(json).unwrap();
         assert_eq!(
             config.acquisition,
-            Acquisition::Streaming { interval_ms: 200, buffer_scans: 500 }
+            Acquisition::Streaming { sample_interval_ms: 200, buffer_scans: 500 }
         );
     }
 
@@ -406,13 +406,13 @@ mod tests {
     fn a_streaming_config_need_not_size_the_buffer() {
         let json = r#"{
             "description": "ADC-20",
-            "acquisition": { "mode": "streaming", "interval_ms": 100 },
+            "acquisition": { "mode": "streaming", "sample_interval_ms": 100 },
             "channels": []
         }"#;
         let config: PicoHrdlConfig = serde_json::from_str(json).unwrap();
         assert_eq!(
             config.acquisition,
-            Acquisition::Streaming { interval_ms: 100, buffer_scans: default_buffer_scans() }
+            Acquisition::Streaming { sample_interval_ms: 100, buffer_scans: default_buffer_scans() }
         );
     }
 
@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn streaming_before_connecting_is_rejected() {
         let mut config = config_with(1, ConversionTime::Ms60);
-        config.acquisition = Acquisition::Streaming { interval_ms: 200, buffer_scans: 100 };
+        config.acquisition = Acquisition::Streaming { sample_interval_ms: 200, buffer_scans: 100 };
         let mut device = PicoHrdl::from_config(config).unwrap();
         assert!(matches!(device.read(), Err(Error::NoHardware)));
     }

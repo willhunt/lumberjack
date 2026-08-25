@@ -33,7 +33,7 @@ pub enum DeviceMessage {
 /// duration, which is why no locking is involved anywhere: exclusive access is
 /// a consequence of the borrow, not something enforced at runtime.
 pub fn run_device(device: &mut Device, sender: Sender<DeviceMessage>, stop: &AtomicBool) {
-    let interval = device.sample_interval;
+    let interval = device.read_interval;
     let name = device.info.name.clone();
     let mut was_connected = device.is_connected();
     // Sleep to a deadline rather than for a fixed duration. Sleeping for the

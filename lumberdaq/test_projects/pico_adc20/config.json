@@ -10,7 +10,6 @@
         "name": "ADC-20",
         "description": "Pico high resolution logger"
       },
-      "sample_interval_ms": 500,
       "hardware": {
         "type": "PicoHrdl",
         "description": "Pico Technology ADC-20",
@@ -32,7 +31,8 @@
             "range": "milli_volts2500"
           }
         ]
-      }
+      },
+      "read_interval_ms": 500
     }
   ]
 }

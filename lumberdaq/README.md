@@ -85,8 +85,15 @@ today and another tomorrow and end up with half its data in each.
 | `"sqlite"` | Default. One file holding the setup and every run. Readable while recording, so a plot can watch a run in progress. Recording again appends a run rather than overwriting. |
 | `"csv"` | Long format, plus a json sidecar. Readable by anything, and a run that dies halfway still leaves a usable file. Recording again **overwrites**. |
 
-Each device has its own `sample_interval_ms` and is read on its own thread, so a
+Each device has its own `read_interval_ms` and is read on its own thread, so a
 slow device does not hold up a fast one.
+
+That is a *collection* rate, not a sample rate. For a device that is polled the
+two are the same, because a read takes a sample. For one that samples on its own
+schedule - a Pico set to stream, or anything on a serial port - it only decides
+how often results are gathered up for saving. How fast it samples is the
+hardware's own setting, and the timestamps come from the device or from when the
+data arrived, so they are the same whatever this is set to.
 
 ## Development
 
