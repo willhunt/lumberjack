@@ -23,7 +23,32 @@ ARGS:
 Recording continues until interrupted with Ctrl-C.
 ";
 
-fn main() -> Result<()> {
+fn main() {
+    // Not `fn main() -> Result<()>`. That prints the error with Debug, which
+    // shows the enum's shape rather than the message written for it:
+    //
+    //     Error: NoProjectHere { directory: "the current directory" }
+    //
+    // rather than
+    //
+    //     Error: no config.json in the current directory, so there is ...
+    //
+    // and it drops the source chain entirely.
+    if let Err(error) = run() {
+        eprintln!("\nError: {}", error);
+
+        // Whatever caused it, in turn. This is where a regex error or serde's
+        // line and column come out, having been attached with #[source].
+        let mut cause = std::error::Error::source(&error);
+        while let Some(next) = cause {
+            eprintln!("  caused by: {}", next);
+            cause = next.source();
+        }
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
     let argument = std::env::args().nth(1);
     if let Some(argument) = argument.as_deref() {
         if argument == "-h" || argument == "--help" {

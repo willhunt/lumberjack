@@ -52,6 +52,26 @@ pub enum Error {
     #[error("cannot add a {expected} channel to this device")]
     WrongHardwareType { expected: String },
 
+    // ---- Projects ----------------------------------------------------------
+    // std::io::Error carries no path, so on its own it says only that some file
+    // was not found. These say which, and what to do about it.
+    #[error("no config.json in {directory}, so there is no project there. Pass a project directory: lumberdaq [PROJECT]")]
+    NoProjectHere { directory: String },
+
+    #[error("could not read {path}")]
+    UnreadableFile {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("{path} is not valid configuration")]
+    UnreadableConfig {
+        path: String,
+        #[source]
+        source: serde_json::Error,
+    },
+
     // ---- Storage -----------------------------------------------------------
     #[error("channel '{channel}' of device '{device}' is not in the recorded setup")]
     UnknownChannel { device: String, channel: String },
