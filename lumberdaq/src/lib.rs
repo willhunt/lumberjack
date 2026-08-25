@@ -5,6 +5,7 @@ pub mod datapoint;
 pub mod channel;
 pub mod device;
 pub mod daq;
+pub mod calculated;
 pub mod config;
 pub mod project;
 pub mod session;

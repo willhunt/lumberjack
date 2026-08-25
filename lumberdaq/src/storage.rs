@@ -39,7 +39,14 @@ impl DaqHeader {
                     info: device.info.clone(),
                     channels: device.hardware.channel_infos(),
                 }
-            ).collect(),
+            ).chain(config.calculated.iter().map(|calculated|
+                // Calculated channels are a device as far as results are
+                // concerned: they have names, units and values over time.
+                DeviceHeader {
+                    info: calculated.info.clone(),
+                    channels: calculated.channels.iter().map(|c| c.info.clone()).collect(),
+                }
+            )).collect(),
         }
     }
 }

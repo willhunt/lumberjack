@@ -1,3 +1,4 @@
+use crate::calculated::CalculatedDevice;
 use crate::daq::DaqInfo;
 use crate::device::DeviceInfo;
 use crate::hardware::HardwareConfig;
@@ -63,4 +64,11 @@ pub struct DaqConfig {
     #[serde(default)]
     pub storage: StorageFormat,
     pub devices: Vec<DeviceConfig>,
+    /// Channels worked out from measured ones rather than read from hardware.
+    ///
+    /// Separate from `devices` because it is not one: it owns no hardware, is
+    /// not connected to, and is not read on a thread. It appears in the results
+    /// as a device because that is what it is to anyone reading them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calculated: Option<CalculatedDevice>,
 }

@@ -196,6 +196,42 @@ impl DataSink for SqliteSink {
             }
             self.channel_ids.insert(device.info.name.clone(), ids);
         }
+
+        // Calculated channels are a device as far as results are concerned, and
+        // they need rows here or their batches have nowhere to go. What goes in
+        // the hardware column is the calculated definition rather than a
+        // HardwareConfig: that column answers "where did these values come
+        // from", and for these the answer is the equations.
+        if let Some(calculated) = &config.calculated {
+            let definition = serde_json::to_string(calculated)?;
+            self.connection.execute(
+                "INSERT INTO devices (run_id, name, description, hardware)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    run_id,
+                    calculated.info.name,
+                    calculated.info.description,
+                    definition
+                ],
+            )?;
+            let device_id = self.connection.last_insert_rowid();
+
+            let mut ids: HashMap<String, i64> = HashMap::new();
+            for channel in calculated.channels.iter() {
+                self.connection.execute(
+                    "INSERT INTO channels (device_id, name, unit, description)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        device_id,
+                        channel.info.name,
+                        channel.info.unit,
+                        channel.info.description
+                    ],
+                )?;
+                ids.insert(channel.info.name.clone(), self.connection.last_insert_rowid());
+            }
+            self.channel_ids.insert(calculated.info.name.clone(), ids);
+        }
         Ok(())
     }
 
@@ -269,6 +305,7 @@ mod tests {
         DaqConfig {
             info: DaqInfo { name: "Test".to_string(), author: "Nobody".to_string() },
             storage: crate::config::StorageFormat::Sqlite,
+            calculated: None,
             devices: vec![DeviceConfig {
                 info: DeviceInfo {
                     name: "Serial test device".to_string(),

@@ -72,6 +72,25 @@ pub enum Error {
         source: serde_json::Error,
     },
 
+    // ---- Calculated channels -----------------------------------------------
+    #[error("the equation for '{channel}' could not be read: {reason}. Equation: {equation}")]
+    InvalidEquation { channel: String, equation: String, reason: String },
+
+    #[error("the equation for '{channel}' uses '{variable}', which is not one of its inputs. Declared: {declared}")]
+    UnknownEquationInput { channel: String, variable: String, declared: String },
+
+    #[error("the equation for '{channel}' has no inputs, so it can never be worked out")]
+    EquationHasNoInput { channel: String },
+
+    #[error("'{channel}' takes {count} inputs. Only one is supported so far: channels sampled at different rates never share a timestamp, and combining them needs a rule for which value of the slower one to use")]
+    MultipleEquationInputs { channel: String, count: usize },
+
+    #[error("'{channel}' {reason}, so {skipped} sample(s) were skipped. Equation: {equation}")]
+    EquationFailed { channel: String, equation: String, skipped: usize, reason: String },
+
+    #[error("'{channel}' reads {reads}, which no device provides")]
+    EquationSourceMissing { channel: String, reads: String },
+
     // ---- Storage -----------------------------------------------------------
     #[error("channel '{channel}' of device '{device}' is not in the recorded setup")]
     UnknownChannel { device: String, channel: String },

@@ -1,0 +1,77 @@
+{
+  "info": {
+    "name": "Calculated channels",
+    "author": "Will Hunt"
+  },
+  "storage": "sqlite",
+  "devices": [
+    {
+      "info": {
+        "name": "Signal generator",
+        "description": "No hardware attached"
+      },
+      "hardware": {
+        "type": "MockHardware",
+        "description": "Mock streaming device",
+        "acquisition": {
+          "mode": "streaming",
+          "sample_interval_ms": 10
+        },
+        "channels": [
+          {
+            "name": "Sine 1Hz",
+            "unit": "-",
+            "description": "-",
+            "input": {
+              "Sine": {
+                "frequency_hz": 1.0
+              }
+            }
+          },
+          {
+            "name": "Sine 5Hz",
+            "unit": "-",
+            "description": "-",
+            "input": {
+              "Sine": {
+                "frequency_hz": 5.0
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "calculated": {
+    "info": {
+      "name": "Derived",
+      "description": "Worked out from the measured channels"
+    },
+    "channels": [
+      {
+        "name": "Scaled",
+        "unit": "bar",
+        "description": "1 Hz sine as a pressure",
+        "inputs": {
+          "v": {
+            "device": "Signal generator",
+            "channel": "Sine 1Hz"
+          }
+        },
+        "equation": "(v + 1) * 2.5"
+      },
+      {
+        "name": "Squared",
+        "unit": "-",
+        "description": "5 Hz sine squared",
+        "inputs": {
+          "s": {
+            "device": "Signal generator",
+            "channel": "Sine 5Hz"
+          }
+        },
+        "equation": "s * s"
+      }
+    ]
+  }
+}

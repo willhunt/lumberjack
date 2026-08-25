@@ -183,6 +183,7 @@ pub fn read_results(csv_path: &std::path::PathBuf, json_path: &std::path::PathBu
     let daq = Daq {
         info: header.info,
         storage: crate::config::StorageFormat::Csv,
+        calculated: None,
         devices: devices,
         sink: None,
     };

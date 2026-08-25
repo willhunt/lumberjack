@@ -1,4 +1,5 @@
 use crate::{ Error, Result };
+use crate::calculated::Calculator;
 use crate::config::{ DaqConfig, DeviceConfig, StorageFormat };
 use crate::device::Device;
 use crate::session::{ run_device, DeviceEvent, DeviceMessage };
@@ -38,6 +39,11 @@ pub struct Daq {
     /// through `config()`; attaching the matching sink is `Project`'s job.
     pub storage: StorageFormat,
     pub devices: Vec<Device>,
+    /// Channels worked out from the measured ones.
+    ///
+    /// Not in `devices`: it owns no hardware and gets no thread. It runs where
+    /// every device's data already meets, in `collect`.
+    pub calculated: Option<Calculator>,
     pub sink: Option<Box<dyn DataSink>>,
 }
 impl Daq {
@@ -52,6 +58,26 @@ impl Daq {
         }
         let mut daq = Daq::new(config.info.name, config.info.author, devices)?;
         daq.storage = config.storage;
+
+        if let Some(calculated) = config.calculated {
+            let calculator = Calculator::from_config(calculated)?;
+            // An equation naming a channel nothing provides is a typo, and
+            // would otherwise show up as a calculated channel that silently
+            // recorded nothing for the whole run.
+            for source in calculator.sources() {
+                let exists = daq.devices.iter().any(|device| {
+                    device.info.name == source.device
+                        && device.channels.iter().any(|c| c.info.name == source.channel)
+                });
+                if !exists {
+                    return Err(Error::EquationSourceMissing {
+                        channel: calculator.device_name().to_string(),
+                        reads: source.to_string(),
+                    });
+                }
+            }
+            daq.calculated = Some(calculator);
+        }
         Ok(daq)
     }
 
@@ -61,6 +87,7 @@ impl Daq {
         DaqConfig {
             info: self.info.clone(),
             storage: self.storage,
+            calculated: self.calculated.as_ref().map(|calc| calc.config()),
             devices: self.devices.iter().map(|device| device.config()).collect::<Vec<DeviceConfig>>(),
         }
     }
@@ -73,6 +100,7 @@ impl Daq {
             },
             storage: StorageFormat::default(),
             devices: vec![],
+            calculated: None,
             sink: None,
         };
         // daq.add_device(devices.pop().unwrap());
@@ -208,6 +236,8 @@ impl Daq {
         let sink = &mut self.sink;
         let (sender, receiver) = mpsc::channel::<DeviceMessage>();
 
+        let calculated = &mut self.calculated;
+
         thread::scope(|scope| {
             for device in devices.iter_mut() {
                 let sender = sender.clone();
@@ -217,7 +247,7 @@ impl Daq {
             // device thread finishes rather than waiting for a sender forever.
             drop(sender);
 
-            collect(receiver, sink, on_event)
+            collect(receiver, sink, calculated, on_event)
         })
     }
 
@@ -249,6 +279,7 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 fn collect(
     receiver: mpsc::Receiver<DeviceMessage>,
     sink: &mut Option<Box<dyn DataSink>>,
+    calculated: &mut Option<Calculator>,
     on_event: &mut dyn FnMut(DeviceEvent),
 ) -> Result<()> {
     let mut last_flush = Instant::now();
@@ -257,8 +288,17 @@ fn collect(
         // flushes on schedule instead of holding data until something arrives.
         match receiver.recv_timeout(FLUSH_INTERVAL) {
             Ok(DeviceMessage::Data(batch)) => {
+                // Calculated first, so both the measurement and what was worked
+                // out from it are written together.
+                let derived = match calculated.as_mut() {
+                    Some(calculator) => calculator.apply(&batch, on_event),
+                    None => Vec::new(),
+                };
                 if let Some(sink) = sink.as_mut() {
                     sink.write_batch(&batch)?;
+                    for batch in derived.iter() {
+                        sink.write_batch(batch)?;
+                    }
                 }
             }
             Ok(DeviceMessage::Event(event)) => on_event(event),
