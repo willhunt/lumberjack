@@ -1,0 +1,55 @@
+{
+  "info": {
+    "name": "Twin devices",
+    "author": "-"
+  },
+  "storage": "sqlite",
+  "devices": [
+    {
+      "info": {
+        "name": "Transducer A",
+        "description": "identical"
+      },
+      "read_interval_ms": 100,
+      "hardware": {
+        "type": "MockHardware",
+        "description": "-",
+        "channels": [
+          {
+            "name": "Pressure",
+            "unit": "bar",
+            "description": "-",
+            "input": {
+              "Sine": {
+                "frequency_hz": 0.5
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "info": {
+        "name": "Transducer B",
+        "description": "identical"
+      },
+      "read_interval_ms": 100,
+      "hardware": {
+        "type": "MockHardware",
+        "description": "-",
+        "channels": [
+          {
+            "name": "Pressure",
+            "unit": "bar",
+            "description": "-",
+            "input": {
+              "Sine": {
+                "frequency_hz": 0.5
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

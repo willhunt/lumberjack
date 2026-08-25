@@ -1,7 +1,7 @@
 use crate::calculated::{ CalculatedDevice, ChannelRef };
 use crate::daq::DaqInfo;
 use crate::device::DeviceInfo;
-use crate::hardware::HardwareConfig;
+use crate::hardware::{ HardwareConfig, SampleRate };
 use serde::{ Deserialize, Serialize };
 
 /// The description of a measurement setup: which devices, which channels,
@@ -90,5 +90,19 @@ impl DaqConfig {
             }
         }
         inputs
+    }
+}
+
+impl DeviceConfig {
+    /// How often this device's channels produce a sample, where the setup says.
+    ///
+    /// None for a device that streams at a rate of its own choosing: it has to
+    /// be measured from what arrives.
+    pub fn sample_interval(&self) -> Option<std::time::Duration> {
+        match self.hardware.sample_rate() {
+            SampleRate::Fixed(interval) => Some(interval),
+            SampleRate::PerRead => Some(std::time::Duration::from_millis(self.read_interval_ms)),
+            SampleRate::Unknown => None,
+        }
     }
 }

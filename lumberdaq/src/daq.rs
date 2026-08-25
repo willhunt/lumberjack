@@ -1,11 +1,12 @@
 use crate::{ Error, Result };
-use crate::calculated::Calculator;
+use crate::calculated::{ Calculator, ChannelRef };
 use crate::config::{ DaqConfig, DeviceConfig, StorageFormat };
 use crate::device::Device;
 use crate::session::{ run_device, DeviceEvent, DeviceMessage };
 use crate::storage::DataSink;
 use serde::{ Deserialize, Serialize };
 use std::sync::atomic::{ AtomicBool, Ordering };
+use std::collections::BTreeMap;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{ Duration, Instant };
@@ -52,6 +53,24 @@ impl Daq {
     /// Where results get written is not decided here. That comes from the
     /// `Project` the config was loaded out of, and reaches the Daq as a sink.
     pub fn from_config(config: DaqConfig) -> Result<Daq> {
+        // What the setup says about how fast each channel samples, gathered
+        // before the device configs are consumed. Anything absent is a device
+        // that streams at a rate of its own, which the calculator measures.
+        let mut declared: BTreeMap<ChannelRef, Duration> = BTreeMap::new();
+        for device in config.devices.iter() {
+            if let Some(interval) = device.sample_interval() {
+                for channel in device.hardware.channel_infos() {
+                    declared.insert(
+                        ChannelRef {
+                            device: device.info.name.clone(),
+                            channel: channel.name,
+                        },
+                        interval,
+                    );
+                }
+            }
+        }
+
         let mut devices: Vec<Device> = Vec::new();
         for device_config in config.devices.into_iter() {
             devices.push(Device::from_config(device_config)?);
@@ -60,7 +79,7 @@ impl Daq {
         daq.storage = config.storage;
 
         if let Some(calculated) = config.calculated {
-            let calculator = Calculator::from_config(calculated)?;
+            let calculator = Calculator::with_rates(calculated, &declared)?;
             // An equation naming a channel nothing provides is a typo, and
             // would otherwise show up as a calculated channel that silently
             // recorded nothing for the whole run.

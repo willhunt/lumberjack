@@ -30,7 +30,46 @@ pub enum HardwareConfig {
     None,
 }
 
+/// How often a device's channels produce a sample.
+///
+/// Needed to pair samples from different devices: a calculated channel takes
+/// each input's nearest sample within half its own period, so that period has
+/// to come from somewhere.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SampleRate {
+    /// Every read takes a sample, so the device's read interval is the period.
+    PerRead,
+    /// The hardware keeps its own schedule at this interval, whatever the
+    /// device's read interval is.
+    Fixed(std::time::Duration),
+    /// The device sends when it likes and nothing declares how often, so it can
+    /// only be measured from what arrives.
+    Unknown,
+}
+
 impl HardwareConfig {
+    /// How often this hardware produces a sample per channel.
+    pub fn sample_rate(&self) -> SampleRate {
+        match self {
+            HardwareConfig::MockHardware(config) => match config.acquisition {
+                mock_hardware::Acquisition::Polled => SampleRate::PerRead,
+                mock_hardware::Acquisition::Streaming { sample_interval_ms } => {
+                    SampleRate::Fixed(std::time::Duration::from_millis(sample_interval_ms))
+                }
+            },
+            HardwareConfig::PicoHrdl(config) => match config.acquisition {
+                pico_hrdl::Acquisition::Polled => SampleRate::PerRead,
+                pico_hrdl::Acquisition::Streaming { sample_interval_ms, .. } => {
+                    SampleRate::Fixed(std::time::Duration::from_millis(sample_interval_ms))
+                }
+            },
+            // The device streams at whatever rate it was built for, and nothing
+            // in the configuration says what that is.
+            HardwareConfig::SerialStream(_) => SampleRate::Unknown,
+            HardwareConfig::None => SampleRate::Unknown,
+        }
+    }
+
     /// The channels this hardware provides, in the order it reads them.
     ///
     /// The hardware config is the single definition of which channels exist.

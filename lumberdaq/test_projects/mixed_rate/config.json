@@ -1,0 +1,55 @@
+{
+  "info": {
+    "name": "Mixed rates",
+    "author": "-"
+  },
+  "storage": "sqlite",
+  "devices": [
+    {
+      "info": {
+        "name": "Slow 1Hz",
+        "description": "-"
+      },
+      "read_interval_ms": 1000,
+      "hardware": {
+        "type": "MockHardware",
+        "description": "-",
+        "channels": [
+          {
+            "name": "Value",
+            "unit": "-",
+            "description": "-",
+            "input": {
+              "Sine": {
+                "frequency_hz": 0.2
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "info": {
+        "name": "Fast 10Hz",
+        "description": "-"
+      },
+      "read_interval_ms": 100,
+      "hardware": {
+        "type": "MockHardware",
+        "description": "-",
+        "channels": [
+          {
+            "name": "Value",
+            "unit": "-",
+            "description": "-",
+            "input": {
+              "Sine": {
+                "frequency_hz": 0.2
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

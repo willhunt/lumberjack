@@ -140,6 +140,58 @@ Four setups under `test_projects/`, each showing one thing:
 cargo run -- test_projects/mock_sine
 ```
 
+## Calculated channels
+
+A sensor reports volts when the quantity you want is pressure. A calculated
+channel applies an equation to measured channels and records the result beside
+them, under a device of its own so what was measured stays distinct from what
+was worked out.
+
+```json
+"calculated": {
+  "info": { "name": "Derived", "description": "" },
+  "channels": [
+    { "name": "Delta P", "unit": "bar", "description": "",
+      "inputs": { "high": { "device": "Transducer", "channel": "High" },
+                  "low":  { "device": "Transducer", "channel": "Low" } },
+      "equation": "high - low" }
+  ]
+}
+```
+
+Inputs are given short names because channel names have spaces and quoting those
+inside an expression is miserable. The usual arithmetic works, along with
+`sqrt`, `abs`, `ln`, `log10`, `exp`, the trigonometric functions and `round`.
+
+Equations are read at run time, so a program embedding lumberdaq can let someone
+write one while it is running. `CalculatedChannel::validate` runs exactly the
+checks a run would, and `DaqConfig::available_inputs` lists what can be referred
+to, which is what a text box and a dropdown need.
+
+### Combining channels that sample at different times
+
+Two devices sampling at the same rate still sample at different moments, so
+values have to be paired rather than matched. A calculated channel is driven by
+its **slowest** input, and every other input contributes its nearest sample
+within half of that input's own period. Nothing to configure: the periods come
+from the setup, or are measured for a device that streams at a rate of its own.
+
+Being driven by the slowest input is what keeps it accurate. Measured on a 1 Hz
+channel against a 10 Hz one:
+
+```text
+trigger on the slow input, pair with the fast:   median   1.8 ms
+trigger on the fast input, pair with the slow:   median 290.7 ms
+```
+
+Two consequences worth knowing. The output appears at the **slowest** input's
+rate; producing it faster would mean repeating a value that was never measured.
+And if an input has no sample near a trigger, because its device stopped, that
+sample is skipped and reported rather than paired with something stale.
+
+Channels of a single device share timestamps exactly, so a differential between
+two channels of one transducer is exact rather than paired.
+
 ## Development
 
 ```cmd

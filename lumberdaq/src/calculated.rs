@@ -11,6 +11,28 @@
 //! prevents. So it is a device in the configuration and in the results, but the
 //! work happens where every device's data already converges: the collecting
 //! loop, between the devices and the sink.
+//!
+//! # Combining channels that never share a timestamp
+//!
+//! Two devices sampling at the same rate still sample at different moments:
+//! separate threads, started at separate instants. Measured on two identical
+//! mock devices at 100ms, not one timestamp of 53 matched, though the nearest
+//! partner was a median of 0.5ms away.
+//!
+//! So values have to be paired rather than matched, and which input drives the
+//! output decides how far out that pairing can be. A calculated channel is
+//! driven by its **slowest** input, and every other input contributes its
+//! nearest sample. That bounds the error by half the *fastest* period rather
+//! than half the slowest. Measured on a 1Hz channel against a 10Hz one:
+//!
+//! ```text
+//! trigger on the slow input, pair with the fast:   median   1.8 ms
+//! trigger on the fast input, pair with the slow:   median 290.7 ms
+//! ```
+//!
+//! The output therefore appears at the slowest input's rate. Producing it any
+//! faster would mean repeating a stale value, which is resolution that was
+//! never measured.
 
 use crate::channel::ChannelInfo;
 use crate::datapoint::DataPoint;
@@ -18,11 +40,22 @@ use crate::device::DeviceInfo;
 use crate::session::DeviceEvent;
 use crate::storage::Batch;
 use crate::{ Error, Result };
+use chrono::{ DateTime, Utc };
 use serde::{ Deserialize, Serialize };
-use std::collections::BTreeMap;
+use std::collections::{ BTreeMap, VecDeque };
+use std::time::Duration;
 
 type Tree = evalexpr::Node<evalexpr::DefaultNumericTypes>;
 type Context = evalexpr::HashMapContext<evalexpr::DefaultNumericTypes>;
+
+/// How many recent samples of an input to keep.
+///
+/// Enough to find the one nearest a trigger, with room for batches from
+/// different devices arriving out of order.
+const HISTORY: usize = 64;
+
+/// How many gaps to measure before trusting a rate nothing declared.
+const GAPS_TO_ESTIMATE: usize = 5;
 
 /// Which measured channel an equation takes a value from.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -72,35 +105,110 @@ pub struct CalculatedDevice {
     pub channels: Vec<CalculatedChannel>,
 }
 
-/// A calculated channel with its equation compiled and its input resolved.
+/// A calculated channel with its equation compiled and its inputs resolved.
 struct Compiled {
     info: ChannelInfo,
     tree: Tree,
-    /// The variable name the equation uses, and the channel it reads.
+    /// Every input, as (variable name, the channel it reads).
+    inputs: Vec<(String, ChannelRef)>,
+    /// Which input drives the output: the slowest, once the rates are known.
     ///
-    /// One input only for now. Several inputs sampled at different rates never
-    /// share a timestamp, so combining them needs a rule about which value of
-    /// the slower one to use, and that is a decision worth making on its own
-    /// rather than falling out of an implementation.
-    variable: String,
-    source: ChannelRef,
+    /// Not knowable when built if an input is on a device whose rate has to be
+    /// measured, so it is settled on the first batch that makes it knowable.
+    trigger: Option<usize>,
+    /// Trigger samples waiting for their partners.
+    ///
+    /// A trigger cannot be resolved the instant it lands: the nearest sample of
+    /// a faster input may be a millisecond *later* and not here yet. Held until
+    /// every other input has something at or after the trigger's time, which is
+    /// when the nearest one is certain.
+    pending: VecDeque<DataPoint>,
+}
+
+/// What is known about how often an input produces samples.
+struct Rate {
+    /// From the setup, where it says.
+    declared: Option<Duration>,
+    /// Gaps seen so far, for an input whose rate nothing declares.
+    gaps: Vec<Duration>,
+    last_seen: Option<DateTime<Utc>>,
+}
+
+impl Rate {
+    fn interval(&self) -> Option<Duration> {
+        if let Some(declared) = self.declared {
+            return Some(declared);
+        }
+        if self.gaps.len() < GAPS_TO_ESTIMATE {
+            return None;
+        }
+        // The median, so one long gap while a device was reconnecting does not
+        // stretch the estimate for the rest of the run.
+        let mut sorted = self.gaps.clone();
+        sorted.sort();
+        Some(sorted[sorted.len() / 2])
+    }
+
+    fn observe(&mut self, at: DateTime<Utc>) {
+        if self.declared.is_none() {
+            if let Some(previous) = self.last_seen {
+                if let Ok(gap) = (at - previous).to_std() {
+                    if self.gaps.len() < GAPS_TO_ESTIMATE * 4 {
+                        self.gaps.push(gap);
+                    }
+                }
+            }
+        }
+        self.last_seen = Some(at);
+    }
 }
 
 /// Turns measured batches into calculated ones.
 pub struct Calculator {
     config: CalculatedDevice,
     compiled: Vec<Compiled>,
+    /// Recent samples per input, for finding the one nearest a trigger.
+    history: BTreeMap<ChannelRef, VecDeque<DataPoint>>,
+    /// How often each input samples, declared or measured.
+    rates: BTreeMap<ChannelRef, Rate>,
 }
 
 impl Calculator {
     /// Compile every equation, so a bad one is refused before a run starts
     /// rather than failing partway through.
     pub fn from_config(config: CalculatedDevice) -> Result<Calculator> {
+        Calculator::with_rates(config, &BTreeMap::new())
+    }
+
+    /// Build with whatever the setup says about how often each input samples.
+    ///
+    /// Anything absent is measured from what arrives, which is how a serial
+    /// device is handled: it streams at a rate of its own and nothing declares
+    /// it. A channel reading one produces nothing until a few samples have been
+    /// seen, which is a short warm up rather than a setting to get wrong.
+    pub fn with_rates(
+        config: CalculatedDevice,
+        declared: &BTreeMap<ChannelRef, Duration>,
+    ) -> Result<Calculator> {
         let mut compiled = Vec::with_capacity(config.channels.len());
+        let mut rates: BTreeMap<ChannelRef, Rate> = BTreeMap::new();
         for channel in config.channels.iter() {
-            compiled.push(compile(channel)?);
+            let ready = compile(channel)?;
+            for (_, source) in ready.inputs.iter() {
+                rates.entry(source.clone()).or_insert_with(|| Rate {
+                    declared: declared.get(source).copied(),
+                    gaps: Vec::new(),
+                    last_seen: None,
+                });
+            }
+            compiled.push(ready);
         }
-        Ok(Calculator { config: config, compiled: compiled })
+        Ok(Calculator {
+            config: config,
+            compiled: compiled,
+            history: BTreeMap::new(),
+            rates: rates,
+        })
     }
 
     pub fn config(&self) -> CalculatedDevice {
@@ -111,74 +219,214 @@ impl Calculator {
         &self.config.info.name
     }
 
-    /// Every channel this calculator reads from.
+    /// Every channel these equations read from.
     ///
     /// Used to check a setup before running it: an equation naming a channel
     /// that does not exist is a typo, and better caught now than by silently
     /// producing nothing for the whole run.
     pub fn sources(&self) -> Vec<ChannelRef> {
-        self.compiled.iter().map(|channel| channel.source.clone()).collect()
+        let mut sources: Vec<ChannelRef> = Vec::new();
+        for channel in self.compiled.iter() {
+            for (_, source) in channel.inputs.iter() {
+                if !sources.contains(source) {
+                    sources.push(source.clone());
+                }
+            }
+        }
+        sources
     }
 
     /// Work out whatever this batch makes possible.
     ///
-    /// A batch of measured data may feed several calculated channels, or none.
-    /// Failures are reported and skipped rather than ending the run: an
-    /// equation that divides by zero on one sample should not stop the
+    /// Data is filed first, then any trigger whose partners have all arrived is
+    /// resolved. Failures are reported and skipped rather than ending the run:
+    /// an equation that divides by zero on one sample should not stop the
     /// recording of everything else.
     pub fn apply(&mut self, batch: &Batch, on_event: &mut dyn FnMut(DeviceEvent)) -> Vec<Batch> {
-        let mut produced: Vec<Batch> = Vec::new();
+        let arrived = ChannelRef { device: batch.device.clone(), channel: batch.channel.clone() };
+        if !self.rates.contains_key(&arrived) {
+            return Vec::new(); // nothing calculates from this channel
+        }
 
-        for channel in self.compiled.iter() {
-            if channel.source.device != batch.device || channel.source.channel != batch.channel {
+        for datapoint in batch.datapoints.iter() {
+            if let Some(rate) = self.rates.get_mut(&arrived) {
+                rate.observe(datapoint.datetime);
+            }
+            let history = self.history.entry(arrived.clone()).or_default();
+            history.push_back(*datapoint);
+            while history.len() > HISTORY {
+                history.pop_front();
+            }
+        }
+
+        // Queue these against any channel they drive.
+        for index in 0..self.compiled.len() {
+            self.settle_trigger(index);
+            let trigger = match self.compiled[index].trigger {
+                Some(trigger) => trigger,
+                None => continue,
+            };
+            if self.compiled[index].inputs[trigger].1 != arrived {
                 continue;
             }
-
-            let mut context = fresh_context();
-            let mut datapoints: Vec<DataPoint> = Vec::with_capacity(batch.datapoints.len());
-            let mut skipped = 0usize;
-            let mut first_failure: Option<String> = None;
-
             for datapoint in batch.datapoints.iter() {
-                match evaluate(&channel.tree, &mut context, &channel.variable, datapoint.value) {
-                    Ok(value) => datapoints.push(DataPoint {
-                        // The input's own timestamp. A calculated value happened
-                        // when the measurement it came from happened, not when
-                        // the arithmetic was done.
-                        datetime: datapoint.datetime,
-                        value: value,
-                    }),
-                    Err(reason) => {
-                        skipped += 1;
-                        if first_failure.is_none() {
-                            first_failure = Some(reason);
-                        }
-                    }
-                }
+                self.compiled[index].pending.push_back(*datapoint);
             }
-
-            if let Some(reason) = first_failure {
-                on_event(DeviceEvent::Problem {
-                    device: self.config.info.name.clone(),
-                    error: Error::EquationFailed {
-                        channel: channel.info.name.clone(),
-                        equation: channel_equation(&self.config, &channel.info.name),
-                        skipped: skipped,
-                        reason: reason,
-                    },
-                });
+            while self.compiled[index].pending.len() > HISTORY {
+                self.compiled[index].pending.pop_front();
             }
+        }
 
-            if !datapoints.is_empty() {
-                produced.push(Batch {
-                    device: self.config.info.name.clone(),
-                    channel: channel.info.name.clone(),
-                    datapoints: datapoints,
-                });
+        let mut produced: Vec<Batch> = Vec::new();
+        for index in 0..self.compiled.len() {
+            if let Some(batch) = self.resolve(index, on_event) {
+                produced.push(batch);
             }
         }
         produced
     }
+
+    /// Decide which input drives a channel, once every rate is known.
+    ///
+    /// The slowest, because that is what bounds the pairing error.
+    fn settle_trigger(&mut self, index: usize) {
+        if self.compiled[index].trigger.is_some() {
+            return;
+        }
+        let mut slowest: Option<(usize, Duration)> = None;
+        for (position, (_, source)) in self.compiled[index].inputs.iter().enumerate() {
+            let interval = match self.rates.get(source).and_then(|rate| rate.interval()) {
+                Some(interval) => interval,
+                None => return, // still learning a rate; decide later
+            };
+            if slowest.map_or(true, |(_, best)| interval > best) {
+                slowest = Some((position, interval));
+            }
+        }
+        self.compiled[index].trigger = slowest.map(|(position, _)| position);
+    }
+
+    /// Emit whatever pending triggers now have all their partners.
+    fn resolve(&mut self, index: usize, on_event: &mut dyn FnMut(DeviceEvent)) -> Option<Batch> {
+        let trigger = self.compiled[index].trigger?;
+        let mut datapoints: Vec<DataPoint> = Vec::new();
+        let mut skipped = 0usize;
+        let mut first_failure: Option<String> = None;
+
+        while let Some(sample) = self.compiled[index].pending.front().copied() {
+            let mut values: Vec<(String, f64)> = Vec::new();
+            let mut ready = true;
+            let mut unavailable = false;
+
+            for (position, (variable, source)) in self.compiled[index].inputs.iter().enumerate() {
+                if position == trigger {
+                    values.push((variable.clone(), sample.value));
+                    continue;
+                }
+                // Half a period: a running input has a sample within that of
+                // any instant, so anything further means it has stopped rather
+                // than merely being out of phase.
+                let window = match self.rates.get(source).and_then(|rate| rate.interval()) {
+                    Some(interval) => interval / 2,
+                    None => {
+                        ready = false;
+                        break;
+                    }
+                };
+                let history = match self.history.get(source) {
+                    Some(history) if !history.is_empty() => history,
+                    _ => {
+                        ready = false;
+                        break;
+                    }
+                };
+                // Nothing at or after the trigger yet, so a nearer sample may
+                // still be on its way. Wait rather than pair with an older one.
+                if history.back().map_or(true, |last| last.datetime < sample.datetime) {
+                    ready = false;
+                    break;
+                }
+                match nearest(history, sample.datetime, window) {
+                    Some(value) => values.push((variable.clone(), value)),
+                    None => {
+                        unavailable = true;
+                        break;
+                    }
+                }
+            }
+
+            if !ready {
+                break; // leave it pending; more data may complete it
+            }
+            self.compiled[index].pending.pop_front();
+            if unavailable {
+                skipped += 1;
+                if first_failure.is_none() {
+                    first_failure = Some("had no sample from every input near it".to_string());
+                }
+                continue;
+            }
+
+            match evaluate(&self.compiled[index].tree, &values) {
+                Ok(value) => datapoints.push(DataPoint {
+                    // The trigger's own timestamp. A calculated value happened
+                    // when the measurement driving it happened.
+                    datetime: sample.datetime,
+                    value: value,
+                }),
+                Err(reason) => {
+                    skipped += 1;
+                    if first_failure.is_none() {
+                        first_failure = Some(reason);
+                    }
+                }
+            }
+        }
+
+        if let Some(reason) = first_failure {
+            on_event(DeviceEvent::Problem {
+                device: self.config.info.name.clone(),
+                error: Error::EquationFailed {
+                    channel: self.compiled[index].info.name.clone(),
+                    equation: channel_equation(&self.config, &self.compiled[index].info.name),
+                    skipped: skipped,
+                    reason: reason,
+                },
+            });
+        }
+
+        if datapoints.is_empty() {
+            return None;
+        }
+        Some(Batch {
+            device: self.config.info.name.clone(),
+            channel: self.compiled[index].info.name.clone(),
+            datapoints: datapoints,
+        })
+    }
+}
+
+/// The value of the sample closest to `at`, if one falls within `window`.
+///
+/// None means the input was not producing around then, which is a reason to
+/// emit nothing rather than to reach for a stale value.
+fn nearest(history: &VecDeque<DataPoint>, at: DateTime<Utc>, window: Duration) -> Option<f64> {
+    let mut best: Option<(Duration, f64)> = None;
+    for sample in history.iter() {
+        let distance = if sample.datetime > at {
+            sample.datetime - at
+        } else {
+            at - sample.datetime
+        };
+        let distance = match distance.to_std() {
+            Ok(distance) => distance,
+            Err(_) => continue,
+        };
+        if distance <= window && best.map_or(true, |(closest, _)| distance < closest) {
+            best = Some((distance, sample.value));
+        }
+    }
+    best.map(|(_, value)| value)
 }
 
 /// A context with the usual maths available under its usual name.
@@ -247,80 +495,63 @@ fn compile(channel: &CalculatedChannel) -> Result<Compiled> {
         }
     }
 
+    if channel.inputs.is_empty() {
+        return Err(Error::EquationHasNoInput { channel: channel.info.name.clone() });
+    }
+
     // Building the tree only catches structural faults such as an unmatched
     // parenthesis. An operator missing an argument, a misspelled function or an
     // empty equation all build perfectly well and fail when evaluated, which
-    // would mean failing on every sample of a run that had already started.
-    // So try it once here, with a stand-in value.
-    let mut trial = fresh_context();
-    for variable in channel.inputs.keys() {
-        use evalexpr::ContextWithMutableVariables;
-        trial
-            .set_value(variable.into(), evalexpr::Value::from_float(1.0))
-            .map_err(|error| Error::InvalidEquation {
+    // would mean failing on every sample of a run that had already started. So
+    // try it once here, with stand-in values.
+    let trial: Vec<(String, f64)> = channel
+        .inputs
+        .keys()
+        .map(|variable| (variable.clone(), 1.0))
+        .collect();
+    if let Err(reason) = evaluate(&tree, &trial) {
+        // A non-finite answer is not a fault in the equation: plenty of sound
+        // ones are undefined at the stand-in value. That is a property of the
+        // data, and is caught per sample instead.
+        if !reason.starts_with("gave ") {
+            return Err(Error::InvalidEquation {
                 channel: channel.info.name.clone(),
                 equation: channel.equation.clone(),
-                reason: error.to_string(),
-            })?;
+                reason: reason,
+            });
+        }
     }
-    let trial_result = tree
-        .eval_with_context(&trial)
-        .and_then(|value| value.as_number())
-        .map_err(|error| Error::InvalidEquation {
-            channel: channel.info.name.clone(),
-            equation: channel.equation.clone(),
-            reason: error.to_string(),
-        })?;
-    // Deliberately not checking the trial value is finite. Plenty of sound
-    // equations divide by something that happens to be zero at the stand-in
-    // value; that is a property of the data, and is caught per sample instead.
-    let _ = trial_result;
-
-    let mut inputs = channel.inputs.iter();
-    let (variable, source) = match (inputs.next(), inputs.next()) {
-        (Some((variable, source)), None) => (variable.clone(), source.clone()),
-        (None, _) => {
-            return Err(Error::EquationHasNoInput { channel: channel.info.name.clone() })
-        }
-        // Several inputs need a rule for combining values that never share a
-        // timestamp. Refused rather than guessed at.
-        (Some(_), Some(_)) => {
-            return Err(Error::MultipleEquationInputs {
-                channel: channel.info.name.clone(),
-                count: channel.inputs.len(),
-            })
-        }
-    };
 
     Ok(Compiled {
         info: channel.info.clone(),
         tree: tree,
-        variable: variable,
-        source: source,
+        inputs: channel
+            .inputs
+            .iter()
+            .map(|(variable, source)| (variable.clone(), source.clone()))
+            .collect(),
+        trigger: None,
+        pending: VecDeque::new(),
     })
 }
 
-/// Evaluate one sample, refusing anything that is not a real number.
+/// Evaluate one set of input values, refusing anything not a real number.
 ///
 /// A division by zero gives infinity rather than an error, and it would be
 /// stored quite happily, so it is caught here: a reading of `inf` looks like
 /// data and is not.
-fn evaluate(
-    tree: &Tree,
-    context: &mut Context,
-    variable: &str,
-    input: f64,
-) -> std::result::Result<f64, String> {
+fn evaluate(tree: &Tree, values: &[(String, f64)]) -> std::result::Result<f64, String> {
     use evalexpr::ContextWithMutableVariables;
-    context
-        .set_value(variable.into(), evalexpr::Value::from_float(input))
-        .map_err(|error| error.to_string())?;
-    let value = tree
-        .eval_with_context(context)
-        .map_err(|error| error.to_string())?;
+    let mut context = fresh_context();
+    for (variable, value) in values.iter() {
+        context
+            .set_value(variable.as_str().into(), evalexpr::Value::from_float(*value))
+            .map_err(|error| error.to_string())?;
+    }
+    let value = tree.eval_with_context(&context).map_err(|error| error.to_string())?;
     let number = value.as_number().map_err(|error| error.to_string())?;
     if !number.is_finite() {
-        return Err(format!("gave {} for an input of {}", number, input));
+        return Err(format!("gave {}", number));
     }
     Ok(number)
 }
@@ -328,7 +559,6 @@ fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
 
     fn channel(name: &str, equation: &str, inputs: &[(&str, &str, &str)]) -> CalculatedChannel {
         CalculatedChannel {
@@ -350,11 +580,45 @@ mod tests {
         }
     }
 
+    fn source(device: &str, channel: &str) -> ChannelRef {
+        ChannelRef { device: device.to_string(), channel: channel.to_string() }
+    }
+
     fn calculator(channels: Vec<CalculatedChannel>) -> Result<Calculator> {
         Calculator::from_config(CalculatedDevice {
             info: DeviceInfo { name: "Derived".to_string(), description: "-".to_string() },
             channels: channels,
         })
+    }
+
+    fn calculator_with(channels: Vec<CalculatedChannel>, rates: &[(&str, &str, u64)]) -> Calculator {
+        let declared: BTreeMap<ChannelRef, Duration> = rates
+            .iter()
+            .map(|(device, channel, ms)| (source(device, channel), Duration::from_millis(*ms)))
+            .collect();
+        Calculator::with_rates(
+            CalculatedDevice {
+                info: DeviceInfo { name: "Derived".to_string(), description: "-".to_string() },
+                channels: channels,
+            },
+            &declared,
+        )
+        .unwrap()
+    }
+
+    /// A batch of one channel, at offsets in milliseconds from `origin`.
+    fn at(origin: DateTime<Utc>, device: &str, name: &str, samples: &[(i64, f64)]) -> Batch {
+        Batch {
+            device: device.to_string(),
+            channel: name.to_string(),
+            datapoints: samples
+                .iter()
+                .map(|(ms, value)| DataPoint {
+                    datetime: origin + chrono::Duration::milliseconds(*ms),
+                    value: *value,
+                })
+                .collect(),
+        }
     }
 
     fn batch(device: &str, name: &str, values: &[f64]) -> Batch {
@@ -375,69 +639,180 @@ mod tests {
 
     fn ignore(_: DeviceEvent) {}
 
+    fn values(batch: &Batch) -> Vec<f64> {
+        batch.datapoints.iter().map(|point| point.value).collect()
+    }
+
+    // -- one input -----------------------------------------------------------
+
     #[test]
     fn an_equation_is_applied_to_every_sample() {
-        let mut calc = calculator(vec![channel(
-            "Pressure",
-            "(v - 0.5) * 12.5",
-            &[("v", "ADC-20", "Input 1")],
-        )])
-        .unwrap();
-
+        let mut calc = calculator_with(
+            vec![channel("Pressure", "(v - 0.5) * 12.5", &[("v", "ADC-20", "Input 1")])],
+            &[("ADC-20", "Input 1", 10)],
+        );
         let produced = calc.apply(&batch("ADC-20", "Input 1", &[0.5, 1.0, 2.0]), &mut ignore);
         assert_eq!(produced.len(), 1);
         assert_eq!(produced[0].device, "Derived");
-        assert_eq!(produced[0].channel, "Pressure");
-        let values: Vec<f64> = produced[0].datapoints.iter().map(|point| point.value).collect();
-        assert_eq!(values, vec![0.0, 6.25, 18.75]);
+        assert_eq!(values(&produced[0]), vec![0.0, 6.25, 18.75]);
     }
 
-    /// A calculated value happened when its measurement happened, not when the
-    /// arithmetic was done.
     #[test]
     fn output_keeps_the_input_timestamps() {
         let mut calc =
-            calculator(vec![channel("Doubled", "v * 2", &[("v", "D", "C")])]).unwrap();
-        let source = batch("D", "C", &[1.0, 2.0, 3.0]);
-        let produced = calc.apply(&source, &mut ignore);
-        let times: Vec<_> = produced[0].datapoints.iter().map(|point| point.datetime).collect();
-        let expected: Vec<_> = source.datapoints.iter().map(|point| point.datetime).collect();
+            calculator_with(vec![channel("Doubled", "v * 2", &[("v", "D", "C")])], &[("D", "C", 10)]);
+        let batch = batch("D", "C", &[1.0, 2.0, 3.0]);
+        let produced = calc.apply(&batch, &mut ignore);
+        let times: Vec<_> = produced[0].datapoints.iter().map(|p| p.datetime).collect();
+        let expected: Vec<_> = batch.datapoints.iter().map(|p| p.datetime).collect();
         assert_eq!(times, expected);
     }
 
     #[test]
     fn a_batch_from_another_channel_produces_nothing() {
         let mut calc =
-            calculator(vec![channel("Doubled", "v * 2", &[("v", "D", "C")])]).unwrap();
+            calculator_with(vec![channel("Doubled", "v * 2", &[("v", "D", "C")])], &[("D", "C", 10)]);
         assert!(calc.apply(&batch("D", "Other", &[1.0]), &mut ignore).is_empty());
         assert!(calc.apply(&batch("Elsewhere", "C", &[1.0]), &mut ignore).is_empty());
     }
 
+    // -- several inputs ------------------------------------------------------
+
+    /// Two channels of one device share timestamps exactly, so the pairing is
+    /// exact and the window never comes into it.
     #[test]
-    fn one_measured_channel_can_feed_several_calculated_ones() {
-        let mut calc = calculator(vec![
-            channel("Doubled", "v * 2", &[("v", "D", "C")]),
-            channel("Halved", "v / 2", &[("v", "D", "C")]),
-        ])
-        .unwrap();
-        let produced = calc.apply(&batch("D", "C", &[4.0]), &mut ignore);
-        assert_eq!(produced.len(), 2);
-        assert_eq!(produced[0].datapoints[0].value, 8.0);
-        assert_eq!(produced[1].datapoints[0].value, 2.0);
+    fn channels_of_one_device_pair_exactly() {
+        let origin = Utc::now();
+        let mut calc = calculator_with(
+            vec![channel(
+                "Differential",
+                "high - low",
+                &[("high", "Rig", "P1"), ("low", "Rig", "P2")],
+            )],
+            &[("Rig", "P1", 100), ("Rig", "P2", 100)],
+        );
+        // As a device sends them: one batch per channel, identical timestamps.
+        assert!(
+            calc.apply(&at(origin, "Rig", "P1", &[(0, 5.0), (100, 6.0)]), &mut ignore).is_empty(),
+            "cannot resolve before the partner arrives"
+        );
+        let produced = calc.apply(&at(origin, "Rig", "P2", &[(0, 2.0), (100, 2.5)]), &mut ignore);
+        assert_eq!(values(&produced[0]), vec![3.0, 3.5]);
     }
 
-    /// Structural faults are caught when the equation is parsed.
+    /// The off-by-one this design exists to prevent. Batches arrive one channel
+    /// at a time, so pairing each trigger with the other input's *latest* value
+    /// would use the previous sample: 9.0 - 2.0 rather than 9.0 - 4.0.
+    #[test]
+    fn a_trigger_waits_rather_than_pairing_with_an_older_sample() {
+        let origin = Utc::now();
+        let mut calc = calculator_with(
+            vec![channel("D", "a - b", &[("a", "Rig", "A"), ("b", "Rig", "B")])],
+            &[("Rig", "A", 100), ("Rig", "B", 100)],
+        );
+        calc.apply(&at(origin, "Rig", "B", &[(0, 2.0)]), &mut ignore);
+        let first = calc.apply(&at(origin, "Rig", "A", &[(0, 5.0)]), &mut ignore);
+        assert_eq!(values(&first[0]), vec![3.0], "5.0 - 2.0, both at time zero");
+
+        // A's second sample arrives before B's. Pairing it with B's latest
+        // would give 9.0 - 2.0 = 7.0, using a value from a hundred
+        // milliseconds earlier, so it must wait instead.
+        assert!(calc.apply(&at(origin, "Rig", "A", &[(100, 9.0)]), &mut ignore).is_empty());
+
+        let second = calc.apply(&at(origin, "Rig", "B", &[(100, 4.0)]), &mut ignore);
+        assert_eq!(values(&second[0]), vec![5.0], "9.0 - 4.0, both at a hundred");
+    }
+
+    /// Two devices at the same rate never share a timestamp, but their nearest
+    /// samples are close. Measured on real ones: a median of 0.5ms at 100ms.
+    #[test]
+    fn twin_devices_pair_on_their_nearest_samples() {
+        let origin = Utc::now();
+        let mut calc = calculator_with(
+            vec![channel("D", "a - b", &[("a", "A", "P"), ("b", "B", "P")])],
+            &[("A", "P", 100), ("B", "P", 100)],
+        );
+        calc.apply(&at(origin, "A", "P", &[(0, 10.0), (100, 12.0)]), &mut ignore);
+        // Three milliseconds out of phase, well inside the fifty millisecond
+        // window that half a period gives.
+        let produced = calc.apply(&at(origin, "B", "P", &[(3, 4.0), (103, 5.0)]), &mut ignore);
+        assert_eq!(values(&produced[0]), vec![6.0, 7.0]);
+    }
+
+    /// The slowest input drives the output, so the result appears at its rate
+    /// and each sample pairs with a fresh value of the fast one.
+    #[test]
+    fn the_slowest_input_drives_the_output() {
+        let origin = Utc::now();
+        let mut calc = calculator_with(
+            vec![channel("D", "slow + fast", &[("slow", "S", "V"), ("fast", "F", "V")])],
+            &[("S", "V", 1000), ("F", "V", 100)],
+        );
+        let fast: Vec<(i64, f64)> = (0..=12).map(|k| (k * 100, k as f64)).collect();
+        calc.apply(&at(origin, "F", "V", &fast), &mut ignore);
+        let produced = calc.apply(&at(origin, "S", "V", &[(0, 100.0), (1000, 200.0)]), &mut ignore);
+        // One output per slow sample, each with the fast value at that moment.
+        assert_eq!(values(&produced[0]), vec![100.0, 210.0]);
+    }
+
+    /// A stopped input has nothing near the trigger, and reaching back to its
+    /// last reading would be fiction.
+    #[test]
+    fn a_trigger_with_no_partner_nearby_produces_nothing() {
+        let origin = Utc::now();
+        let mut calc = calculator_with(
+            vec![channel("D", "a + b", &[("a", "A", "V"), ("b", "B", "V")])],
+            &[("A", "V", 100), ("B", "V", 100)],
+        );
+        calc.apply(&at(origin, "B", "V", &[(0, 1.0)]), &mut ignore);
+        calc.apply(&at(origin, "A", "V", &[(0, 10.0)]), &mut ignore);
+        let mut problems = 0;
+        // A trigger long after anything B produced, then a later B sample so
+        // the trigger is resolvable rather than merely waiting.
+        calc.apply(&at(origin, "A", "V", &[(5000, 20.0)]), &mut ignore);
+        let produced = calc.apply(&at(origin, "B", "V", &[(6000, 2.0)]), &mut |event| {
+            if matches!(event, DeviceEvent::Problem { .. }) {
+                problems += 1;
+            }
+        });
+        assert_eq!(problems, 1, "should report that it could not pair");
+        assert!(produced.is_empty());
+    }
+
+    /// A serial device streams at a rate nothing declares, so it is measured
+    /// and nothing is produced until enough gaps have been seen.
+    #[test]
+    fn an_undeclared_rate_is_measured_before_anything_is_produced() {
+        let origin = Utc::now();
+        let mut calc = calculator_with(
+            vec![channel("D", "a * b", &[("a", "Serial", "V"), ("b", "Known", "V")])],
+            &[("Known", "V", 100)],
+        );
+        // Too few samples to know the serial rate yet.
+        let early: Vec<(i64, f64)> = (0..3).map(|k| (k * 100, 2.0)).collect();
+        calc.apply(&at(origin, "Serial", "V", &early), &mut ignore);
+        calc.apply(&at(origin, "Known", "V", &[(0, 3.0)]), &mut ignore);
+        assert!(calc.apply(&at(origin, "Known", "V", &[(100, 3.0)]), &mut ignore).is_empty());
+
+        // Enough gaps now, so the rate is known and pairing can start.
+        let later: Vec<(i64, f64)> = (3..12).map(|k| (k * 100, 2.0)).collect();
+        calc.apply(&at(origin, "Serial", "V", &later), &mut ignore);
+        let produced = calc.apply(&at(origin, "Known", "V", &[(500, 3.0)]), &mut ignore);
+        assert!(!produced.is_empty(), "should produce once the rate is known");
+        assert_eq!(values(&produced[0]), vec![6.0]);
+    }
+
+    // -- refusals ------------------------------------------------------------
+
     #[test]
     fn an_unbalanced_equation_is_refused_at_build() {
-        let error = calculator(vec![channel("Bad", "v * (2", &[("v", "D", "C")])])
-            .err()
-            .unwrap();
+        let error = calculator(vec![channel("Bad", "v * (2", &[("v", "D", "C")])]).err().unwrap();
         assert!(matches!(error, Error::InvalidEquation { .. }));
     }
 
     /// These all parse. They only fail when evaluated, which without the trial
-    /// evaluation would mean failing on every sample of a run already under
-    /// way rather than being refused before it started.
+    /// evaluation would mean failing on every sample of a run already under way
+    /// rather than being refused before it started.
     #[test]
     fn equations_that_only_fail_when_run_are_still_refused_at_build() {
         for equation in ["v * * 2", "v +", "v $$ 2", "v 2", ""] {
@@ -454,18 +829,13 @@ mod tests {
     /// for real data, so the trial must not require a finite answer.
     #[test]
     fn an_equation_undefined_at_the_trial_value_is_still_accepted() {
-        // 1 is the stand-in, so this divides by zero while being built.
-        let calc = calculator(vec![channel("Ratio", "1 / (v - 1)", &[("v", "D", "C")])]);
-        assert!(calc.is_ok());
+        assert!(calculator(vec![channel("Ratio", "1 / (v - 1)", &[("v", "D", "C")])]).is_ok());
     }
 
-    /// An equation naming something never declared would fail on every sample
-    /// while looking perfectly reasonable in the config.
     #[test]
     fn an_undeclared_variable_is_refused_at_build() {
-        let error = calculator(vec![channel("Bad", "v * offset", &[("v", "D", "C")])])
-            .err()
-            .unwrap();
+        let error =
+            calculator(vec![channel("Bad", "v * offset", &[("v", "D", "C")])]).err().unwrap();
         assert!(matches!(error, Error::UnknownEquationInput { .. }));
         assert!(error.to_string().contains("offset"));
     }
@@ -476,26 +846,12 @@ mod tests {
         assert!(matches!(error, Error::EquationHasNoInput { .. }));
     }
 
-    /// Several inputs need a rule for values that never share a timestamp.
-    /// Refusing is better than quietly picking one.
-    #[test]
-    fn several_inputs_are_refused_for_now() {
-        let error = calculator(vec![channel(
-            "Difference",
-            "a - b",
-            &[("a", "D", "High"), ("b", "D", "Low")],
-        )])
-        .err()
-        .unwrap();
-        assert!(matches!(error, Error::MultipleEquationInputs { .. }));
-    }
-
     /// Infinity is not a reading. It would store perfectly happily and look
     /// like data.
     #[test]
     fn a_non_finite_result_is_skipped_and_reported() {
         let mut calc =
-            calculator(vec![channel("Ratio", "1 / v", &[("v", "D", "C")])]).unwrap();
+            calculator_with(vec![channel("Ratio", "1 / v", &[("v", "D", "C")])], &[("D", "C", 10)]);
         let mut problems = 0;
         let produced = calc.apply(&batch("D", "C", &[1.0, 0.0, 4.0]), &mut |event| {
             if matches!(event, DeviceEvent::Problem { .. }) {
@@ -503,51 +859,59 @@ mod tests {
             }
         });
         assert_eq!(problems, 1);
-        let values: Vec<f64> = produced[0].datapoints.iter().map(|point| point.value).collect();
-        assert_eq!(values, vec![1.0, 0.25]);
+        assert_eq!(values(&produced[0]), vec![1.0, 0.25]);
+    }
+
+    // -- the rest ------------------------------------------------------------
+
+    #[test]
+    fn one_measured_channel_can_feed_several_calculated_ones() {
+        let mut calc = calculator_with(
+            vec![
+                channel("Doubled", "v * 2", &[("v", "D", "C")]),
+                channel("Halved", "v / 2", &[("v", "D", "C")]),
+            ],
+            &[("D", "C", 10)],
+        );
+        let produced = calc.apply(&batch("D", "C", &[4.0]), &mut ignore);
+        assert_eq!(produced.len(), 2);
+        assert_eq!(produced[0].datapoints[0].value, 8.0);
+        assert_eq!(produced[1].datapoints[0].value, 2.0);
     }
 
     /// evalexpr namespaces these as math::sqrt. Someone typing into a box in a
     /// user interface will write sqrt, so both have to work.
     #[test]
     fn the_usual_maths_works_under_its_usual_name() {
-        let mut calc = calculator(vec![
-            channel("Root", "sqrt(v)", &[("v", "D", "C")]),
-            channel("Namespaced", "math::sqrt(v)", &[("v", "D", "C")]),
-            channel("Magnitude", "abs(0 - v)", &[("v", "D", "C")]),
-        ])
-        .unwrap();
+        let mut calc = calculator_with(
+            vec![
+                channel("Root", "sqrt(v)", &[("v", "D", "C")]),
+                channel("Namespaced", "math::sqrt(v)", &[("v", "D", "C")]),
+                channel("Magnitude", "abs(0 - v)", &[("v", "D", "C")]),
+            ],
+            &[("D", "C", 10)],
+        );
         let produced = calc.apply(&batch("D", "C", &[9.0]), &mut ignore);
-        let values: Vec<f64> = produced.iter().map(|b| b.datapoints[0].value).collect();
-        assert_eq!(values, vec![3.0, 3.0, 9.0]);
+        let got: Vec<f64> = produced.iter().map(|b| b.datapoints[0].value).collect();
+        assert_eq!(got, vec![3.0, 3.0, 9.0]);
     }
 
     /// The check a user interface would run behind a text box, on an equation
     /// that did not exist when this was built.
     #[test]
     fn an_equation_can_be_checked_on_its_own() {
-        let good = channel("X", "sqrt(v) * 2", &[("v", "D", "C")]);
-        assert!(good.validate().is_ok());
-
-        let bad = channel("X", "v * (2", &[("v", "D", "C")]);
-        assert!(bad.validate().is_err());
+        assert!(channel("X", "sqrt(v) * 2", &[("v", "D", "C")]).validate().is_ok());
+        assert!(channel("X", "v * (2", &[("v", "D", "C")]).validate().is_err());
+        assert!(channel("X", "a - b", &[("a", "D", "C"), ("b", "D", "E")]).validate().is_ok());
     }
 
     #[test]
-    fn sources_lists_what_the_equations_read() {
-        let calc = calculator(vec![
-            channel("A", "v * 2", &[("v", "Rig", "Volts")]),
-            channel("B", "v + 1", &[("v", "Other", "Amps")]),
-        ])
-        .unwrap();
+    fn sources_lists_every_channel_the_equations_read() {
+        let calc =
+            calculator(vec![channel("D", "a - b", &[("a", "Rig", "Volts"), ("b", "Other", "Amps")])])
+                .unwrap();
         let sources = calc.sources();
-        assert!(sources.contains(&ChannelRef {
-            device: "Rig".to_string(),
-            channel: "Volts".to_string()
-        }));
-        assert!(sources.contains(&ChannelRef {
-            device: "Other".to_string(),
-            channel: "Amps".to_string()
-        }));
+        assert!(sources.contains(&source("Rig", "Volts")));
+        assert!(sources.contains(&source("Other", "Amps")));
     }
 }
