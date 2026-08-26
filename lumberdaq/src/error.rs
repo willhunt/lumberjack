@@ -106,6 +106,17 @@ pub enum Error {
     #[error("the scale for '{channel}' {reason}, so {skipped} reading(s) were left out. Scale: {scale}")]
     ScaleFailed { channel: String, scale: String, skipped: usize, reason: String },
 
+    #[error("the {sink} sink failed{others}")]
+    SinkFailed {
+        sink: String,
+        /// Named here rather than dropped: when a disk fills, every sink
+        /// writing to it fails at once, and hearing about one of them makes
+        /// that look like a fault in that sink alone.
+        others: String,
+        #[source]
+        source: Box<Error>,
+    },
+
     #[error("'{channel}' takes {count} inputs. Only one is supported so far: channels sampled at different rates never share a timestamp, and combining them needs a rule for which value of the slower one to use")]
     MultipleEquationInputs { channel: String, count: usize },
 

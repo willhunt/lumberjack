@@ -65,6 +65,30 @@ A worked example, in the shape a TUI or GUI would use:
 cargo run --example embed -- test_projects/simulated_and_serial_devices
 ```
 
+### Recording to more than one place
+
+A run has one sink, so recording to two places is a sink that is itself two:
+
+```rust
+daq.set_sink(Box::new(
+    Fanout::new()
+        .and("sqlite", project.sink(StorageFormat::Sqlite)?)
+        .and("csv", project.sink(StorageFormat::Csv)?),
+))?;
+```
+
+`Fanout` is a `DataSink` like any other, so nothing in `Daq` knows the
+difference. Every sink is offered each batch even if an earlier one fails, so a
+sink that has gone wrong cannot starve the others; the failure is reported
+afterwards and names all of them, since a full disk fails every sink at once.
+
+This is also how a live display attaches: it is a sink alongside the file it is
+being written to, not a second path through the library.
+
+```cmd
+cargo run --example two_sinks -- test_projects/scaled
+```
+
 ## Project directory
 
 ```
