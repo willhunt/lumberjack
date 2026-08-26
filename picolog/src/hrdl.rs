@@ -159,7 +159,11 @@ impl fmt::Display for DriverError {
             DriverError::ConfigFail => "the unit could not be configured",
             DriverError::OsNotSupported => "this operating system is not supported",
             DriverError::MaxDevices => "too many units are already open",
-            DriverError::Unknown(code) => return write!(formatter, "driver error {}", code),
+            // The header defines 0 to 5, but a real ADC-20 returns 8 through
+            // HRDL_ERROR after a rejected channel, so this is reachable.
+            DriverError::Unknown(code) => {
+                return write!(formatter, "the driver reported code {}", code)
+            }
         };
         formatter.write_str(text)
     }
@@ -258,7 +262,17 @@ impl fmt::Display for Error {
                 formatter.write_str("the driver loaded but found no unit attached")
             }
             Error::Failed { operation, driver, settings } => {
-                write!(formatter, "{} failed: {} ({})", operation, settings, driver)
+                // The settings code says which argument was objected to and is
+                // the useful one. The driver code is reported only when the
+                // settings are fine, which means the failure was something
+                // else. Observed on a real ADC-20: a bad channel gives settings
+                // 3 and driver 8, and 8 is not a value the header defines, so
+                // printing it alongside a perfectly good explanation was only
+                // ever noise.
+                match settings {
+                    SettingsError::Ok => write!(formatter, "{} failed: {}", operation, driver),
+                    _ => write!(formatter, "{} failed: {}", operation, settings),
+                }
             }
             Error::ChannelOutOfRange(channel) => write!(
                 formatter,
@@ -578,12 +592,16 @@ impl Hrdl {
     }
 
     /// Ask the driver what went wrong with the last call.
+    ///
+    /// These must be read before anything else is asked of the unit. A
+    /// successful `HRDLGetUnitInfo` resets the settings code to SE_OK, so
+    /// reading the other lines first would report that nothing was wrong.
+    /// Confirmed on a real ADC-20: a failure that reported settings code 3
+    /// read back as 9 once seven other info lines had been fetched.
     fn failure(&self, operation: &'static str) -> Error {
-        Error::Failed {
-            operation: operation,
-            driver: DriverError::from_code(self.info_code(Info::Error)),
-            settings: SettingsError::from_code(self.info_code(Info::Settings)),
-        }
+        let settings = SettingsError::from_code(self.info_code(Info::Settings));
+        let driver = DriverError::from_code(self.info_code(Info::Error));
+        Error::Failed { operation: operation, driver: driver, settings: settings }
     }
 
     /// The driver returns these codes as decimal text through GetUnitInfo.
@@ -716,6 +734,33 @@ mod tests {
     /// Pico's own example: "Primary inputs for differential pairs are odd
     /// channel numbers eg 1, 3, 5, etc. Their corresponding secondary numbers
     /// are primary channel number + 1".
+    /// The settings code carries the useful explanation, so it is what a
+    /// message should lead with. Reporting the driver code alongside it was
+    /// noise, and the value observed there is not one the header defines.
+    #[test]
+    fn a_failure_reports_the_settings_complaint_not_the_driver_code() {
+        let failure = Error::Failed {
+            operation: "HRDLSetAnalogInChannel",
+            driver: DriverError::Unknown(8),
+            settings: SettingsError::ChannelNotAvailable,
+        };
+        let message = failure.to_string();
+        assert!(message.contains("channel not available"));
+        assert!(!message.contains("8"), "driver code should not be reported: {}", message);
+    }
+
+    /// When the settings were accepted the failure was something else, so then
+    /// the driver code is all there is to go on.
+    #[test]
+    fn a_failure_with_good_settings_falls_back_to_the_driver_code() {
+        let failure = Error::Failed {
+            operation: "HRDLOpenUnit",
+            driver: DriverError::NotFound,
+            settings: SettingsError::Ok,
+        };
+        assert!(failure.to_string().contains("no unit found"));
+    }
+
     #[test]
     fn only_odd_channels_can_lead_a_differential_pair() {
         assert!(can_be_differential(1));
