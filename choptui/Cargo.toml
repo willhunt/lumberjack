@@ -8,3 +8,4 @@ description = "Terminal monitor for a lumberdaq acquisition"
 # that this is a separate crate, so everything it uses has to be public API.
 [dependencies]
 lumberdaq = { path = "../lumberdaq" }
+ratatui = "0.30.2"
