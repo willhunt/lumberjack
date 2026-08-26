@@ -55,7 +55,11 @@ pub enum Error {
     // ---- Projects ----------------------------------------------------------
     // std::io::Error carries no path, so on its own it says only that some file
     // was not found. These say which, and what to do about it.
-    #[error("no config.json in {directory}, so there is no project there. Pass a project directory: lumberdaq [PROJECT]")]
+    // No program is named here. Whatever hits this might be the CLI, the
+    // terminal monitor or something embedding the library, and telling one of
+    // them to run another is worse than saying nothing. The usage line belongs
+    // to whichever program printed the error.
+    #[error("no config.json in {directory}, so there is no project there")]
     NoProjectHere { directory: String },
 
     #[error("could not read {path}")]

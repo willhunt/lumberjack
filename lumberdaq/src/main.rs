@@ -49,6 +49,11 @@ fn main() {
             eprintln!("  caused by: {}", next);
             cause = next.source();
         }
+        // The library says a project is not there; only this knows what to
+        // type instead.
+        if matches!(error, lumberdaq::Error::NoProjectHere { .. }) {
+            eprintln!("\nUSAGE: lumberdaq [PROJECT]");
+        }
         std::process::exit(1);
     }
 }

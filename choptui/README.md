@@ -2,11 +2,21 @@
 
 A terminal monitor for a lumberdaq acquisition.
 
+From the repository root:
+
 ```cmd
 cargo run -p choptui -- lumberdaq/test_projects/scaled
 ```
 
-Reads the same project directory the CLI records from.
+Or from inside `lumberdaq/`, which is where the CLI is usually run:
+
+```cmd
+cargo run -p choptui -- test_projects/scaled
+```
+
+The path is relative to wherever you are, not to the crate, so `-p choptui`
+does not change what a relative path means. It reads the same project directory
+the CLI records from.
 
 ```
 LUMBERJACK  test_projects/scaled                             not recording
