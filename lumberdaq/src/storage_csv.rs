@@ -161,11 +161,7 @@ pub fn read_results(csv_path: &std::path::PathBuf, json_path: &std::path::PathBu
                 Some(data) => data,
                 None => return Err(format!("Channel '{}' missing from csv read", &channel_info.name).into()),
             };
-            let channel = Channel {
-                info: channel_info.clone(),
-                datapoints: datapoints.clone(),
-                datapoint_last: None,
-            };
+            let channel = Channel::from_stored(channel_info.clone(), datapoints.clone());
             channels.push(channel);
         }
         let device = Device {

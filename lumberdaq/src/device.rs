@@ -103,7 +103,7 @@ impl Device {
     pub fn rebuild_channels(&mut self) -> Result<()> {
         self.channels = vec![];
         for info in self.hardware.config().channel_infos().into_iter() {
-            self.add_channel(Channel::from_info(info))?;
+            self.add_channel(Channel::from_info(info)?)?;
         }
         Ok(())
     }

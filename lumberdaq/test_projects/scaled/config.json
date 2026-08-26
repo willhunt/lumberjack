@@ -1,0 +1,63 @@
+{
+  "info": {
+    "name": "Scaled channels",
+    "author": "Will Hunt"
+  },
+  "storage": "sqlite",
+  "devices": [
+    {
+      "info": {
+        "name": "Rig",
+        "description": "No hardware attached. Stands in for two scaled sensors"
+      },
+      "hardware": {
+        "type": "MockHardware",
+        "description": "Mock streaming device",
+        "acquisition": {
+          "mode": "streaming",
+          "sample_interval_ms": 50
+        },
+        "channels": [
+          {
+            "name": "Flow",
+            "unit": "L/min",
+            "description": "4-20 mA transmitter, 0-29 L/min, across a 120 ohm shunt",
+            "scale": {
+              "from": "4-20 mA transmitter",
+              "equation": "(((x / shunt_ohms) * 1000 - 4) / 16) * (high - low) + low",
+              "parameters": {
+                "shunt_ohms": 120,
+                "low": 0,
+                "high": 29
+              }
+            },
+            "input": {
+              "Constant": 1.44
+            }
+          },
+          {
+            "name": "Pressure",
+            "unit": "bar",
+            "description": "0-10 bar transducer on a plain linear scale",
+            "scale": "x * 5 + 5",
+            "input": {
+              "Sine": {
+                "frequency_hz": 0.5
+              }
+            }
+          },
+          {
+            "name": "Raw sine",
+            "unit": "V",
+            "description": "No scale, for comparison",
+            "input": {
+              "Sine": {
+                "frequency_hz": 0.5
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

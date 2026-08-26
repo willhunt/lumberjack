@@ -125,10 +125,11 @@ device  --read_interval_ms-->  batches  --channel-->  sink  --1 s-->  disk
 
 ## Test projects
 
-Four setups under `test_projects/`, each showing one thing:
+Setups under `test_projects/`, each showing one thing:
 
 | | needs hardware | shows |
 |---|---|---|
+| `scaled` | no | scaled channels, recording the sensor's units rather than volts, with and without named constants |
 | `mock_sine` | no | streaming with nothing plugged in. Two sine channels sampled at 100 Hz, collected far more slowly. The values can be checked against the wave they claim to be. |
 | `simulated_and_serial_devices` | a serial device on COM3 | a mock and a real device in one run, at different rates, on their own threads |
 | `pico_adc20` | ADC-20 or ADC-24 | polled acquisition, where `read_interval_ms` is the sample rate |
@@ -158,12 +159,74 @@ Configuring that wrongly is refused before a run rather than at connect, naming
 the pair you probably meant. Whether a channel exists at all depends on the
 model, so that is checked when the unit is opened and can say which it is.
 
+## Scaling a channel
+
+A sensor reports volts when the quantity you want is litres per minute. A scale
+converts each reading as it arrives, so the channel records the quantity and not
+the voltage it was measured as. `x` is the raw measurement:
+
+```json
+{ "name": "Pressure", "unit": "bar", "description": "0-10 bar transducer",
+  "scale": "x * 5 + 5" }
+```
+
+Any channel on any device can take a `scale`; leave it out and readings are
+stored as they came.
+
+### Keeping the numbers editable
+
+Written that way, the constants dissolve into the arithmetic. `x / 120` gives no
+hint that 120 is a shunt resistor, so refitting a 100 ohm one means working the
+equation out again, and no saved project can say what sensor it was for.
+
+Naming them instead keeps them editable:
+
+```json
+{ "name": "Flow", "unit": "L/min", "description": "0-29 L/min flow meter",
+  "scale": {
+    "from": "4-20 mA transmitter",
+    "equation": "(((x / shunt_ohms) * 1000 - 4) / 16) * (high - low) + low",
+    "parameters": { "shunt_ohms": 120, "low": 0, "high": 29 }
+  } }
+```
+
+Both forms are the same equation at run time — the constants are simply bound
+alongside `x`. `from` is a label and nothing more, naming the sensor definition
+the numbers came from so an interface can offer the right form for editing them.
+The equation is copied in rather than referred to, so a project still runs when
+that definition is not to hand.
+
+`Scale::parameters` and `Scale::from` are what a form reads to fill itself in.
+
+### What is checked, and when
+
+A scale that will not parse, or that reads a name it has no value for, is
+refused when the project is loaded rather than on the first reading of a run.
+The message lists what was available, since the cause is almost always a typo:
+
+```
+the scale for 'Flow' uses 'shunt', which it has no value for.
+Available: x (the measurement), high, low, shunt_ohms. Scale: x / shunt
+```
+
+A reading that cannot be scaled at all is left out and reported; the others from
+the same read are still kept.
+
+**The raw reading is not kept.** That is the point of it, since nobody wants
+volts from a flow meter, but it does mean the scale is the only way back to the
+measurement. It is written into the results with the rest of the config, so a
+wrongly scaled run can be recovered as long as the equation can be undone —
+which for a multiplication or an offset it always can.
+
+`test_projects/scaled` shows both forms with an unscaled channel beside them for
+comparison. It needs no hardware.
+
 ## Calculated channels
 
-A sensor reports volts when the quantity you want is pressure. A calculated
-channel applies an equation to measured channels and records the result beside
-them, under a device of its own so what was measured stays distinct from what
-was worked out.
+A scale reads one channel. When a value needs several — a differential pressure
+from two transducers — a calculated channel applies an equation across measured
+channels and records the result beside them, under a device of its own so what
+was measured stays distinct from what was worked out.
 
 ```json
 "calculated": {
@@ -221,5 +284,6 @@ cargo check --all-targets
 `--all-targets` or `cargo test` to catch breakage there.
 
 # Todo
-- Add pico technology data loggers. This crate for the oscilloscopes may have reusable patterns including runtime driver download but doesn't cover data loggers [pico_sdk](https://docs.rs/pico-sdk/latest/pico_sdk/).
+- Add pico technology TC-08.
+- Post processing.
 - Create installer including any required .dll files.

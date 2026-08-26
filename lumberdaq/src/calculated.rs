@@ -36,6 +36,7 @@
 
 use crate::channel::ChannelInfo;
 use crate::datapoint::DataPoint;
+use crate::equation::Expression;
 use crate::device::DeviceInfo;
 use crate::session::DeviceEvent;
 use crate::storage::Batch;
@@ -45,8 +46,6 @@ use serde::{ Deserialize, Serialize };
 use std::collections::{ BTreeMap, VecDeque };
 use std::time::Duration;
 
-type Tree = evalexpr::Node<evalexpr::DefaultNumericTypes>;
-type Context = evalexpr::HashMapContext<evalexpr::DefaultNumericTypes>;
 
 /// How many recent samples of an input to keep.
 ///
@@ -108,7 +107,7 @@ pub struct CalculatedDevice {
 /// A calculated channel with its equation compiled and its inputs resolved.
 struct Compiled {
     info: ChannelInfo,
-    tree: Tree,
+    expression: Expression,
     /// Every input, as (variable name, the channel it reads).
     inputs: Vec<(String, ChannelRef)>,
     /// Which input drives the output: the slowest, once the rates are known.
@@ -367,7 +366,7 @@ impl Calculator {
                 continue;
             }
 
-            match evaluate(&self.compiled[index].tree, &values) {
+            match self.compiled[index].expression.evaluate(&values) {
                 Ok(value) => datapoints.push(DataPoint {
                     // The trigger's own timestamp. A calculated value happened
                     // when the measurement driving it happened.
@@ -429,42 +428,6 @@ fn nearest(history: &VecDeque<DataPoint>, at: DateTime<Utc>, window: Duration) -
     best.map(|(_, value)| value)
 }
 
-/// A context with the usual maths available under its usual name.
-///
-/// evalexpr provides these as `math::sqrt` and so on. Someone typing an
-/// equation into a box expects `sqrt(dp)`, not `math::sqrt(dp)`, so the plain
-/// names are bound here as well. The prefixed forms keep working.
-fn fresh_context() -> Context {
-    use evalexpr::ContextWithMutableFunctions;
-    let mut context = Context::new();
-    let unary: [(&str, fn(f64) -> f64); 12] = [
-        ("sqrt", f64::sqrt),
-        ("abs", f64::abs),
-        ("ln", f64::ln),
-        ("log10", f64::log10),
-        ("exp", f64::exp),
-        ("sin", f64::sin),
-        ("cos", f64::cos),
-        ("tan", f64::tan),
-        ("asin", f64::asin),
-        ("acos", f64::acos),
-        ("atan", f64::atan),
-        ("round", f64::round),
-    ];
-    for (name, function) in unary {
-        // set_function only fails on a name that is not a valid identifier, and
-        // these are all literals, so there is nothing to handle.
-        let _ = context.set_function(
-            name.to_string(),
-            evalexpr::Function::new(move |argument| {
-                let value = argument.as_number()?;
-                Ok(evalexpr::Value::from_float(function(value)))
-            }),
-        );
-    }
-    context
-}
-
 fn channel_equation(config: &CalculatedDevice, name: &str) -> String {
     config
         .channels
@@ -476,20 +439,21 @@ fn channel_equation(config: &CalculatedDevice, name: &str) -> String {
 
 /// Compile one channel's equation and check it against its declared inputs.
 fn compile(channel: &CalculatedChannel) -> Result<Compiled> {
-    let tree = evalexpr::build_operator_tree::<evalexpr::DefaultNumericTypes>(&channel.equation)
-        .map_err(|error| Error::InvalidEquation {
+    let expression = Expression::compile(&channel.equation).map_err(|reason| {
+        Error::InvalidEquation {
             channel: channel.info.name.clone(),
             equation: channel.equation.clone(),
-            reason: error.to_string(),
-        })?;
+            reason: reason,
+        }
+    })?;
 
     // An equation using a name that was never declared would otherwise fail on
     // every sample at run time, having looked fine in the config.
-    for used in tree.iter_variable_identifiers() {
-        if !channel.inputs.contains_key(used) {
+    for used in expression.variables() {
+        if !channel.inputs.contains_key(&used) {
             return Err(Error::UnknownEquationInput {
                 channel: channel.info.name.clone(),
-                variable: used.to_string(),
+                variable: used,
                 declared: channel.inputs.keys().cloned().collect::<Vec<_>>().join(", "),
             });
         }
@@ -499,32 +463,21 @@ fn compile(channel: &CalculatedChannel) -> Result<Compiled> {
         return Err(Error::EquationHasNoInput { channel: channel.info.name.clone() });
     }
 
-    // Building the tree only catches structural faults such as an unmatched
-    // parenthesis. An operator missing an argument, a misspelled function or an
-    // empty equation all build perfectly well and fail when evaluated, which
-    // would mean failing on every sample of a run that had already started. So
-    // try it once here, with stand-in values.
-    let trial: Vec<(String, f64)> = channel
+    // Nothing is known about the inputs until data arrives, so 1 stands in.
+    let declared: Vec<(String, f64)> = channel
         .inputs
         .keys()
         .map(|variable| (variable.clone(), 1.0))
         .collect();
-    if let Err(reason) = evaluate(&tree, &trial) {
-        // A non-finite answer is not a fault in the equation: plenty of sound
-        // ones are undefined at the stand-in value. That is a property of the
-        // data, and is caught per sample instead.
-        if !reason.starts_with("gave ") {
-            return Err(Error::InvalidEquation {
-                channel: channel.info.name.clone(),
-                equation: channel.equation.clone(),
-                reason: reason,
-            });
-        }
-    }
+    expression.check(&declared).map_err(|reason| Error::InvalidEquation {
+        channel: channel.info.name.clone(),
+        equation: channel.equation.clone(),
+        reason: reason,
+    })?;
 
     Ok(Compiled {
         info: channel.info.clone(),
-        tree: tree,
+        expression: expression,
         inputs: channel
             .inputs
             .iter()
@@ -533,27 +486,6 @@ fn compile(channel: &CalculatedChannel) -> Result<Compiled> {
         trigger: None,
         pending: VecDeque::new(),
     })
-}
-
-/// Evaluate one set of input values, refusing anything not a real number.
-///
-/// A division by zero gives infinity rather than an error, and it would be
-/// stored quite happily, so it is caught here: a reading of `inf` looks like
-/// data and is not.
-fn evaluate(tree: &Tree, values: &[(String, f64)]) -> std::result::Result<f64, String> {
-    use evalexpr::ContextWithMutableVariables;
-    let mut context = fresh_context();
-    for (variable, value) in values.iter() {
-        context
-            .set_value(variable.as_str().into(), evalexpr::Value::from_float(*value))
-            .map_err(|error| error.to_string())?;
-    }
-    let value = tree.eval_with_context(&context).map_err(|error| error.to_string())?;
-    let number = value.as_number().map_err(|error| error.to_string())?;
-    if !number.is_finite() {
-        return Err(format!("gave {}", number));
-    }
-    Ok(number)
 }
 
 #[cfg(test)]
@@ -566,6 +498,7 @@ mod tests {
                 name: name.to_string(),
                 unit: "-".to_string(),
                 description: "-".to_string(),
+            scale: None,
             },
             inputs: inputs
                 .iter()

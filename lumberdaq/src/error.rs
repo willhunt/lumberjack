@@ -97,6 +97,15 @@ pub enum Error {
     #[error("the equation for '{channel}' has no inputs, so it can never be worked out")]
     EquationHasNoInput { channel: String },
 
+    #[error("the scale for '{channel}' could not be used: {reason}. Scale: {scale}")]
+    InvalidScale { channel: String, scale: String, reason: String },
+
+    #[error("the scale for '{channel}' uses '{variable}', which it has no value for. Available: {available}. Scale: {scale}")]
+    UnknownScaleVariable { channel: String, variable: String, available: String, scale: String },
+
+    #[error("the scale for '{channel}' {reason}, so {skipped} reading(s) were left out. Scale: {scale}")]
+    ScaleFailed { channel: String, scale: String, skipped: usize, reason: String },
+
     #[error("'{channel}' takes {count} inputs. Only one is supported so far: channels sampled at different rates never share a timestamp, and combining them needs a rule for which value of the slower one to use")]
     MultipleEquationInputs { channel: String, count: usize },
 

@@ -322,6 +322,7 @@ mod tests {
                             name: "Pressure".to_string(),
                             unit: "Pa".to_string(),
                             description: "-".to_string(),
+                        scale: None,
                         },
                         index: index,
                     }],
