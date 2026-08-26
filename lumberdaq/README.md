@@ -32,6 +32,36 @@ whatever is still buffered. Killing the process instead loses that.
 cargo run -- --help
 ```
 
+### Checking a setup without running it
+
+```cmd
+cargo run -- check test_projects/scaled
+```
+
+Builds everything a recording would build and reports what is wrong, without
+connecting to any hardware or writing a results file. Useful away from the rig,
+and before a run that matters.
+
+Problems are collected a part at a time rather than stopping at the first, so
+three misconfigured devices take one run of this to find rather than three:
+
+```
+    ok    device 'Good rig', 1 channel(s)
+    FAIL  device 'Bad scale'
+          the scale for 'Flow' uses 'v', which it has no value for. Available: x (the measurement). Scale: v * 2
+    FAIL  device 'Bad pico'
+          channel 2 cannot be differential: a differential input pairs a channel with the one above it,
+          so the first of the pair must be odd. Use channel 1 to measure between 1 and 2
+    FAIL  calculated channel 'Missing source'
+          'Missing source' reads Ghost/Nothing, which no device provides
+```
+
+It exits non-zero when anything failed, so it is worth something in a script.
+`Project::check` is the same thing for a program embedding the library, and
+`check_config` takes a configuration that has not been saved yet.
+
+What it cannot tell you is whether the hardware answers. That needs the rig.
+
 ## Creating a project
 
 `build_config` defines a rig in Rust and writes it out as a config. That is a

@@ -1,11 +1,13 @@
 //! Record a project from the command line.
 //!
 //!     lumberdaq [project directory]
+//!     lumberdaq check [project directory]
 //!
 //! The directory holds config.json describing the devices, and is where the
 //! results are written. Defaults to the current directory, so running inside a
 //! project needs no argument at all.
 
+use lumberdaq::project::Project;
 use lumberdaq::session::DeviceEvent;
 use lumberdaq::Result;
 use std::sync::atomic::{ AtomicBool, Ordering };
@@ -15,12 +17,15 @@ const HELP: &str = "\
 Record a data acquisition project.
 
 USAGE:
-    lumberdaq [PROJECT]
+    lumberdaq [PROJECT]           Record until interrupted with Ctrl-C.
+    lumberdaq check [PROJECT]     Check the setup and stop.
 
 ARGS:
     PROJECT    Directory holding config.json. Defaults to the current directory.
 
-Recording continues until interrupted with Ctrl-C.
+`check` builds everything a recording would build and reports what is wrong,
+without connecting to any hardware or writing a results file. Useful away from
+the rig, and before a run that matters.
 ";
 
 fn main() {
@@ -49,18 +54,62 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let argument = std::env::args().nth(1);
-    if let Some(argument) = argument.as_deref() {
-        if argument == "-h" || argument == "--help" {
+    let mut arguments = std::env::args().skip(1);
+    match arguments.next().as_deref() {
+        Some("-h") | Some("--help") => {
             print!("{}", HELP);
-            return Ok(());
+            Ok(())
+        }
+        Some("check") => check(&directory_or_here(arguments.next())),
+        argument => record(&directory_or_here(argument.map(String::from))),
+    }
+}
+
+/// Running inside a project should need no argument at all.
+fn directory_or_here(argument: Option<String>) -> String {
+    argument.unwrap_or_else(|| ".".to_string())
+}
+
+/// Report on a setup without connecting to it or writing anything.
+fn check(directory: &str) -> Result<()> {
+    let report = Project::new(directory).check()?;
+    println!("Checking {}
+", directory);
+
+    for part in report.passed.iter() {
+        println!("    ok    {}", part);
+    }
+    for problem in report.problems.iter() {
+        println!("    FAIL  {}", problem.part);
+        println!("          {}", problem.error);
+        // The regex, or serde's line and column, attached with #[source].
+        let mut cause = std::error::Error::source(&problem.error);
+        while let Some(next) = cause {
+            println!("          caused by: {}", next);
+            cause = next.source();
         }
     }
-    let directory = argument.unwrap_or_else(|| ".".to_string());
 
+    match report.is_ok() {
+        true => {
+            println!("
+Nothing wrong with the setup. Whether the hardware answers is another question.");
+            Ok(())
+        }
+        // A non-zero exit, so this is worth something in a script.
+        false => Err(format!(
+            "{} of {} parts of the setup would stop a run.",
+            report.problems.len(),
+            report.problems.len() + report.passed.len()
+        )
+        .into()),
+    }
+}
+
+fn record(directory: &str) -> Result<()> {
     // Everything about the setup, including which format to record in, comes
     // from the directory. Nothing here needs recompiling to change a channel.
-    let mut daq = lumberdaq::open(&directory)?;
+    let mut daq = lumberdaq::open(directory)?;
     println!("Project: {}", directory);
 
     // Try every device, so one bad port does not hide the state of the rest.

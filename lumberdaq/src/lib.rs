@@ -6,6 +6,7 @@ pub mod channel;
 pub mod device;
 pub mod daq;
 pub mod calculated;
+pub mod check;
 pub mod equation;
 pub mod config;
 pub mod project;

@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::check::{ check_config, CheckReport };
 use crate::config::{ DaqConfig, StorageFormat };
 use crate::configuration::{ read_configuration_file, write_configuration_file };
 use crate::daq::Daq;
@@ -80,6 +81,15 @@ impl Project {
         let mut daq = Daq::from_config(config)?;
         daq.set_sink(self.sink(storage)?)?;
         Ok(daq)
+    }
+
+    /// Check this project's configuration without running it.
+    ///
+    /// Fails only when there is nothing to check: no config file, or one that
+    /// is not valid JSON. Anything past that comes back as a report, since a
+    /// bad device is a finding rather than a reason to stop looking.
+    pub fn check(&self) -> Result<CheckReport> {
+        Ok(check_config(self.read_config()?))
     }
 
     /// The sink this project records to, per its config.
