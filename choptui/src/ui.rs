@@ -11,7 +11,7 @@ use ratatui::crossterm::event::{ self, Event, KeyCode, KeyEventKind, KeyModifier
 use ratatui::layout::{ Alignment, Constraint, Layout, Rect };
 use ratatui::style::{ Color, Modifier, Style };
 use ratatui::text::{ Line, Span };
-use ratatui::widgets::{ Block, Paragraph, Row, Table };
+use ratatui::widgets::{ Block, Padding, Paragraph, Row, Table };
 use ratatui::Frame;
 use std::collections::VecDeque;
 use std::sync::atomic::{ AtomicBool, Ordering };
@@ -27,6 +27,17 @@ const TICK: Duration = Duration::from_millis(50);
 const LOG_KEPT: usize = 200;
 
 const TABS: [&str; 4] = ["Devices", "Plots", "Log", "Settings"];
+
+/// Space between a channel name, its reading and its count.
+const GAP: u16 = 2;
+
+/// Room for a count of readings. Six figures is an hour at 50 Hz.
+const COUNT_WIDTH: u16 = 7;
+
+/// The most of a disconnection reason to put on a device border. The whole of
+/// it is in the log; a driver sentence on the border would otherwise set the
+/// width of every box on the screen.
+const REASON_SHOWN: usize = 28;
 
 const ACCENT: Color = Color::LightRed;
 const DIM: Color = Color::DarkGray;
@@ -195,58 +206,145 @@ fn tab_bar(selected: usize) -> Line<'static> {
 }
 
 fn devices(frame: &mut Frame, area: Rect, state: &State) {
-    // Two lines of border plus one per channel, so each device keeps its own
-    // height rather than the space being shared out evenly.
-    let heights: Vec<Constraint> = state
+    // Columns are sized to what is in them, and to the widest across every
+    // device rather than per device, so the boxes line up with one another
+    // instead of each finding its own layout.
+    let channels = || state.devices.iter().flat_map(|device| device.channels.iter());
+    let name_width = channels()
+        .map(|channel| channel.name.chars().count() as u16)
+        .max()
+        .unwrap_or(0)
+        .clamp(8, 32);
+    // A reading and its unit: room for a number, a space, and the unit.
+    let value_width = channels()
+        .map(|channel| channel.unit.chars().count() as u16)
+        .max()
+        .unwrap_or(0)
+        .clamp(1, 12)
+        + 11;
+
+    // Content, plus a border and a space of padding at each side.
+    let content = name_width + GAP + value_width + GAP + COUNT_WIDTH;
+    let width = state
         .devices
         .iter()
-        .map(|device| Constraint::Length(device.channels.len() as u16 + 2))
-        .chain(std::iter::once(Constraint::Min(0)))
-        .collect();
+        .map(title_width)
+        .max()
+        .unwrap_or(0)
+        .max(content + 4);
 
-    let areas = Layout::vertical(heights).split(area);
-    for (device, area) in state.devices.iter().zip(areas.iter()) {
-        let (label, colour) = match &device.status {
-            Status::Connected => ("Connected".to_string(), Color::Green),
-            Status::Disconnected(None) => ("Waiting".to_string(), DIM),
-            Status::Disconnected(Some(cause)) => (cause.clone(), Color::Red),
-        };
+    // Left aligned at its own width rather than stretched across the terminal,
+    // which on a wide screen left a gulf between a name and its reading.
+    let width = width.min(area.width);
 
-        let block = Block::bordered()
-            .border_style(Style::new().fg(ACCENT))
-            .title(Span::styled(
-                format!(" {} ", device.name),
-                Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
-            ))
-            .title_top(
-                Line::from(Span::styled(format!(" {} ", label), Style::new().fg(colour)))
-                    .right_aligned(),
-            );
+    // Placed one after another rather than by the constraint solver, which
+    // when the terminal is too short shares the shortfall out among the boxes
+    // until the padding has eaten every channel. A device is better shown
+    // whole or not at all.
+    let mut top = area.y;
+    let mut shown = 0;
+    for device in state.devices.iter() {
+        let height = device.channels.len() as u16 + 4;
+        if top + height > area.bottom() {
+            break;
+        }
+        render_device(frame, Rect { x: area.x, y: top, width: width, height: height }, device,
+                      name_width, value_width);
+        // A blank line between one device and the next.
+        top += height + 1;
+        shown += 1;
+    }
 
-        let rows = device.channels.iter().map(|channel| {
-            Row::new(vec![
-                Span::styled(channel.name.clone(), Style::new().fg(ACCENT)),
-                Span::styled(
-                    match channel.latest {
-                        Some(value) => format!("{:.3} {}", value, channel.unit),
-                        // Nothing yet, which is not a reading of zero.
-                        None => format!("--- {}", channel.unit),
-                    },
-                    Style::new().fg(Color::White),
-                ),
-                Span::styled(channel.readings.to_string(), Style::new().fg(DIM)),
-            ])
-        });
-
+    // Silently leaving devices off screen would look like a setup with fewer
+    // devices in it than it has.
+    // `top` has already skipped the blank line after the last box, so that
+    // line is the first free one and is where this goes. If even that is past
+    // the bottom there is nowhere to say it.
+    if shown < state.devices.len() && top <= area.bottom() {
         frame.render_widget(
-            Table::new(
-                rows,
-                [Constraint::Percentage(50), Constraint::Length(18), Constraint::Length(10)],
-            )
-            .block(block),
-            *area,
+            Paragraph::new(Span::styled(
+                format!("{} more below, not enough room", state.devices.len() - shown),
+                Style::new().fg(DIM),
+            )),
+            Rect { x: area.x, y: top - 1, width: width, height: 1 },
         );
     }
+}
+
+fn render_device(
+    frame: &mut Frame,
+    area: Rect,
+    device: &DeviceRow,
+    name_width: u16,
+    value_width: u16,
+) {
+    let (label, colour) = status(&device.status);
+
+    let block = Block::bordered()
+        .border_style(Style::new().fg(ACCENT))
+        // A blank line above and below the channels, and a space at each side,
+        // so nothing sits against the border.
+        .padding(Padding::symmetric(1, 1))
+        .title(Span::styled(
+            format!(" {} ", device.name),
+            Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+        ))
+        .title_top(
+            Line::from(Span::styled(format!(" {} ", label), Style::new().fg(colour)))
+                .right_aligned(),
+        );
+
+    let rows = device.channels.iter().map(|channel| {
+        Row::new(vec![
+            Span::styled(channel.name.clone(), Style::new().fg(ACCENT)),
+            Span::styled(
+                match channel.latest {
+                    Some(value) => format!("{:.3} {}", value, channel.unit),
+                    // Nothing yet, which is not a reading of zero.
+                    None => format!("--- {}", channel.unit),
+                },
+                Style::new().fg(Color::White),
+            ),
+            Span::styled(channel.readings.to_string(), Style::new().fg(DIM)),
+        ])
+    });
+
+    frame.render_widget(
+        Table::new(
+            rows,
+            [
+                Constraint::Length(name_width),
+                Constraint::Length(value_width),
+                Constraint::Length(COUNT_WIDTH),
+            ],
+        )
+        .column_spacing(GAP)
+        .block(block),
+        area,
+    );
+}
+
+/// What a device says on its border, and how that should look.
+fn status(status: &Status) -> (String, Color) {
+    match status {
+        Status::Connected => ("Connected".to_string(), Color::Green),
+        Status::Disconnected(None) => ("Waiting".to_string(), DIM),
+        Status::Disconnected(Some(reason)) => (shortened(reason), Color::Red),
+    }
+}
+
+fn shortened(reason: &str) -> String {
+    match reason.chars().count() > REASON_SHOWN {
+        true => reason.chars().take(REASON_SHOWN - 1).collect::<String>() + "\u{2026}",
+        false => reason.to_string(),
+    }
+}
+
+/// How wide a device box has to be for its name and status to fit the border.
+fn title_width(device: &DeviceRow) -> u16 {
+    let (label, _) = status(&device.status);
+    // A space each side of both, two corners, and two dashes between them.
+    (device.name.chars().count() + label.chars().count() + 8) as u16
 }
 
 fn log(frame: &mut Frame, area: Rect, state: &State) {
@@ -402,7 +500,7 @@ mod tests {
 
     #[test]
     fn the_devices_tab_shows_every_channel_and_its_latest_reading() {
-        let screen = rendered(&state(), 74, 12);
+        let screen = rendered(&state(), 74, 16);
         println!("{}", screen);
         assert!(screen.contains("LUMBERJACK"), "{}", screen);
         assert!(screen.contains("14.500 L/min"), "{}", screen);
@@ -413,7 +511,7 @@ mod tests {
     fn a_device_that_never_connected_still_appears_with_its_channels() {
         // Otherwise the one thing worth looking at, a rig that is not there,
         // would be the one thing the screen does not mention.
-        let screen = rendered(&state(), 74, 12);
+        let screen = rendered(&state(), 74, 16);
         assert!(screen.contains("Missing rig"), "{}", screen);
         assert!(screen.contains("Temperature"), "{}", screen);
         assert!(screen.contains("port not found"), "{}", screen);
@@ -423,7 +521,7 @@ mod tests {
     fn nothing_yet_reads_differently_from_a_reading_of_zero() {
         let mut state = state();
         state.devices[0].channels[0].latest = Some(0.0);
-        let screen = rendered(&state, 74, 12);
+        let screen = rendered(&state, 74, 16);
         assert!(screen.contains("0.000 L/min"), "{}", screen);
         assert!(screen.contains("--- C"), "{}", screen);
     }
@@ -462,11 +560,52 @@ mod tests {
             device: "Rig".to_string(),
             cause: Some("the port went away".to_string()),
         });
-        let screen = rendered(&state, 74, 12);
+        let screen = rendered(&state, 74, 16);
         assert!(screen.contains("the port went away"), "{}", screen);
         state.tab = 2;
-        let screen = rendered(&state, 74, 12);
+        let screen = rendered(&state, 74, 16);
         assert!(screen.contains("Rig disconnected: the port went away"), "{}", screen);
+    }
+
+    #[test]
+    fn a_box_is_only_as_wide_as_it_needs_to_be() {
+        // Stretched across the terminal, a name and its reading ended up at
+        // opposite ends of the screen.
+        let screen = rendered(&state(), 120, 16);
+        let widest = screen
+            .lines()
+            .filter(|line| line.contains("L/min"))
+            .map(|line| line.trim_end().chars().count())
+            .max()
+            .unwrap();
+        assert!(widest < 60, "box is {} wide on a 120 column terminal", widest);
+    }
+
+    #[test]
+    fn a_long_reason_does_not_set_the_width_of_every_box() {
+        // What a serial port really says when it is not there. On the border it
+        // would widen every device on screen; the log has it in full.
+        let mut state = state();
+        state.apply(Update::Disconnected {
+            device: "Missing rig".to_string(),
+            cause: Some("The system cannot find the file specified.".to_string()),
+        });
+        let screen = rendered(&state, 120, 16);
+        assert!(!screen.contains("cannot find the file specified."), "{}", screen);
+        assert!(screen.contains("The system cannot"), "{}", screen);
+        assert!(
+            state.log.iter().any(|line| line.ends_with("file specified.")),
+            "the whole reason should still be in the log"
+        );
+    }
+
+    #[test]
+    fn devices_that_do_not_fit_are_counted_rather_than_dropped() {
+        // A screen quietly showing fewer devices than the setup has looks like
+        // a setup with fewer devices in it.
+        let screen = rendered(&state(), 74, 10);
+        assert!(screen.contains("Rig"), "{}", screen);
+        assert!(screen.contains("1 more below"), "{}", screen);
     }
 
     #[test]

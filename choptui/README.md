@@ -22,13 +22,18 @@ the CLI records from.
 LUMBERJACK  test_projects/scaled                             not recording
 Devices  -  Plots  -  Log  -  Settings
 
-┌ Rig ──────────────────────────────────────────────────────── Connected ┐
-│Flow                                 14.500 L/min       63              │
-│Pressure                             7.250 bar          61              │
-└────────────────────────────────────────────────────────────────────────┘
-┌ Missing rig ─────────────────────────────────────────── port not found ┐
-│Temperature                          --- C              0               │
-└────────────────────────────────────────────────────────────────────────┘
+┌ Rig ──────────────────────── Connected ┐
+│                                        │
+│ Flow         14.500 L/min      63      │
+│ Pressure     7.250 bar         61      │
+│                                        │
+└────────────────────────────────────────┘
+
+┌ Missing rig ─────────── port not found ┐
+│                                        │
+│ Temperature  --- C             0       │
+│                                        │
+└────────────────────────────────────────┘
 ```
 
 `Tab` and the arrow keys move between tabs. `q`, `Esc` or `Ctrl-C` stops the
