@@ -3,7 +3,10 @@ use crate::datapoint::DataPoint;
 use crate::device::{ Device, DeviceInterface };
 use crate::hardware::{ Hardware, HardwareDataAquisition };
 use crate::{ Error, Result };
-use picolog::hrdl::{ counts_to_volts, ConversionTime, Hrdl, VoltageRange };
+use picolog::hrdl::{
+    can_be_differential, counts_to_volts, differential_partner, ConversionTime, Hrdl,
+    VoltageRange, MAX_CHANNEL, MIN_CHANNEL,
+};
 use serde::{ Deserialize, Serialize };
 use std::time::Duration;
 
@@ -131,6 +134,7 @@ impl PicoHrdl {
     }
 
     pub fn from_config(config: PicoHrdlConfig) -> Result<PicoHrdl> {
+        check_channels(&config)?;
         Ok(PicoHrdl {
             config: config,
             unit: None,
@@ -164,10 +168,78 @@ impl PicoHrdl {
     }
 }
 
+/// Check a channel list against how the hardware pairs its inputs.
+///
+/// Done when the setup is built rather than at connect, so a rig that cannot
+/// work is refused before anything is plugged in or recorded. The driver would
+/// reject most of this too, but only once a run was being started, and with
+/// less to say about why.
+fn check_channels(config: &PicoHrdlConfig) -> Result<()> {
+    let mut configured: Vec<u16> = Vec::new();
+    for channel in config.channels.iter() {
+        // Guarded before the arithmetic below, which would otherwise wrap.
+        if channel.channel < MIN_CHANNEL || channel.channel > MAX_CHANNEL {
+            return Err(Error::ChannelOutOfRange {
+                channel: channel.channel,
+                lowest: MIN_CHANNEL,
+                highest: MAX_CHANNEL,
+            });
+        }
+        if configured.contains(&channel.channel) {
+            return Err(Error::DuplicateChannelNumber { channel: channel.channel });
+        }
+        configured.push(channel.channel);
+    }
+
+    for channel in config.channels.iter() {
+        if channel.single_ended {
+            continue;
+        }
+        // A differential input measures between a channel and the one above
+        // it, so the first of the pair is always odd.
+        if !can_be_differential(channel.channel) {
+            return Err(Error::DifferentialNeedsOddChannel {
+                channel: channel.channel,
+                // The pair that actually includes this channel starts below it.
+                pair_starts_at: channel.channel - 1,
+            });
+        }
+        // The other half is consumed by the pair and cannot be used again.
+        let partner = differential_partner(channel.channel);
+        if configured.contains(&partner) {
+            return Err(Error::DifferentialPartnerInUse {
+                primary: channel.channel,
+                secondary: partner,
+            });
+        }
+    }
+    Ok(())
+}
+
 impl DeviceInterface for PicoHrdl {
     fn connect(&mut self) -> Result<()> {
         let mut unit = Hrdl::open()?;
         unit.set_mains_rejection(self.config.mains_sixty_hertz)?;
+
+        // How many inputs this unit has depends on which model it is, and only
+        // the unit knows. An ADC-20 has eight where an ADC-24 has sixteen, so a
+        // config written for one refuses clearly on the other.
+        let available = unit.channel_count()?;
+        let variant = unit.info(picolog::hrdl::Info::Variant).unwrap_or_default();
+        for channel in self.config.channels.iter() {
+            let highest = if channel.single_ended {
+                channel.channel
+            } else {
+                differential_partner(channel.channel)
+            };
+            if highest > available {
+                return Err(Error::ChannelNotOnThisUnit {
+                    channel: channel.channel,
+                    variant: variant.clone(),
+                    available: available,
+                });
+            }
+        }
 
         let mut full_scale_counts = Vec::with_capacity(self.config.channels.len());
         for channel in self.config.channels.iter() {
@@ -424,6 +496,88 @@ mod tests {
         config.acquisition = Acquisition::Streaming { sample_interval_ms: 200, buffer_scans: 100 };
         let mut device = PicoHrdl::from_config(config).unwrap();
         assert!(matches!(device.read(), Err(Error::NoHardware)));
+    }
+
+    fn differential(channels: &[(u16, bool)]) -> PicoHrdlConfig {
+        PicoHrdlConfig {
+            description: "-".to_string(),
+            conversion_time: ConversionTime::Ms60,
+            mains_sixty_hertz: false,
+            acquisition: Acquisition::Polled,
+            channels: channels
+                .iter()
+                .map(|(number, single_ended)| PicoHrdlChannel {
+                    info: ChannelInfo {
+                        name: format!("Channel {}", number),
+                        unit: "V".to_string(),
+                        description: "-".to_string(),
+                    },
+                    channel: *number,
+                    range: VoltageRange::MilliVolts2500,
+                    single_ended: *single_ended,
+                })
+                .collect(),
+        }
+    }
+
+    /// A differential input measures between a channel and the one above it,
+    /// so the first of the pair is odd. An ADC-20 has eight inputs and so four
+    /// differential pairs: 1-2, 3-4, 5-6, 7-8.
+    #[test]
+    fn odd_channels_can_be_differential() {
+        for channel in [1u16, 3, 5, 7] {
+            assert!(
+                PicoHrdl::from_config(differential(&[(channel, false)])).is_ok(),
+                "channel {} should be a valid differential input",
+                channel
+            );
+        }
+    }
+
+    /// Asking for a differential on an even channel is a mistake worth catching
+    /// before a run: the driver would refuse it, but only at connect.
+    #[test]
+    fn an_even_channel_cannot_lead_a_differential_pair() {
+        let error = PicoHrdl::from_config(differential(&[(2, false)])).err().unwrap();
+        assert!(matches!(error, Error::DifferentialNeedsOddChannel { .. }));
+        // The pair that includes channel 2 is 1-2, not 2-3.
+        assert!(
+            error.to_string().contains("between 1 and 2"),
+            "misleading suggestion: {}",
+            error
+        );
+    }
+
+    /// The even half of a pair is consumed by it, so it cannot be configured
+    /// separately. Left unchecked this would silently measure something else.
+    #[test]
+    fn the_other_half_of_a_pair_cannot_be_used_again() {
+        let error = PicoHrdl::from_config(differential(&[(1, false), (2, true)]))
+            .err()
+            .unwrap();
+        assert!(matches!(error, Error::DifferentialPartnerInUse { primary: 1, secondary: 2 }));
+    }
+
+    /// Two differential pairs side by side are fine: 1-2 and 3-4 do not clash.
+    #[test]
+    fn adjacent_differential_pairs_do_not_clash() {
+        assert!(PicoHrdl::from_config(differential(&[(1, false), (3, false)])).is_ok());
+    }
+
+    /// Channel zero is the digital block, and subtracting one from it would
+    /// wrap round to sixty five thousand.
+    #[test]
+    fn channel_zero_is_refused_rather_than_wrapping() {
+        let error = PicoHrdl::from_config(differential(&[(0, false)])).err().unwrap();
+        assert!(matches!(error, Error::ChannelOutOfRange { .. }));
+    }
+
+    #[test]
+    fn the_same_channel_twice_is_refused() {
+        let error = PicoHrdl::from_config(differential(&[(1, true), (1, true)]))
+            .err()
+            .unwrap();
+        assert!(matches!(error, Error::DuplicateChannelNumber { channel: 1 }));
     }
 
     /// Most inputs are single ended, so a config should not have to say so.

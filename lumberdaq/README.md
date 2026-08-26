@@ -140,6 +140,24 @@ Four setups under `test_projects/`, each showing one thing:
 cargo run -- test_projects/mock_sine
 ```
 
+### Differential inputs on a Pico logger
+
+A channel measures against ground unless it says otherwise:
+
+```json
+{ "name": "Delta P", "unit": "V", "description": "",
+  "channel": 1, "range": "milli_volts2500", "single_ended": false }
+```
+
+A differential input measures between a channel and the one above it, so the
+first of the pair is always odd and the even channel beside it is consumed. An
+ADC-20 has eight inputs and therefore four differential pairs, 1-2, 3-4, 5-6 and
+7-8; an ADC-24 has sixteen and eight pairs.
+
+Configuring that wrongly is refused before a run rather than at connect, naming
+the pair you probably meant. Whether a channel exists at all depends on the
+model, so that is checked when the unit is opened and can say which it is.
+
 ## Calculated channels
 
 A sensor reports volts when the quantity you want is pressure. A calculated

@@ -1,0 +1,40 @@
+{
+  "info": {
+    "name": "ADC-20 differential",
+    "author": "Will Hunt"
+  },
+  "storage": "sqlite",
+  "devices": [
+    {
+      "info": {
+        "name": "ADC-20",
+        "description": "Differential pressure"
+      },
+      "read_interval_ms": 500,
+      "hardware": {
+        "type": "PicoHrdl",
+        "description": "Pico ADC-20",
+        "conversion_time": "ms60",
+        "mains_sixty_hertz": false,
+        "channels": [
+          {
+            "name": "Delta P",
+            "unit": "V",
+            "description": "Differential across inputs 1 and 2",
+            "channel": 1,
+            "range": "milli_volts2500",
+            "single_ended": false
+          },
+          {
+            "name": "Line",
+            "unit": "V",
+            "description": "Differential across inputs 3 and 4",
+            "channel": 3,
+            "range": "milli_volts625",
+            "single_ended": false
+          }
+        ]
+      }
+    }
+  ]
+}

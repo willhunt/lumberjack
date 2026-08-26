@@ -72,6 +72,21 @@ pub enum Error {
         source: serde_json::Error,
     },
 
+    #[error("channel {channel} cannot be differential: a differential input pairs a channel with the one above it, so the first of the pair must be odd. Use channel {pair_starts_at} to measure between {pair_starts_at} and {channel}")]
+    DifferentialNeedsOddChannel { channel: u16, pair_starts_at: u16 },
+
+    #[error("channel {secondary} is the other half of differential channel {primary}, so it cannot also be configured on its own")]
+    DifferentialPartnerInUse { primary: u16, secondary: u16 },
+
+    #[error("channel {channel} is configured more than once on the same device")]
+    DuplicateChannelNumber { channel: u16 },
+
+    #[error("channel {channel} is outside the {lowest}..={highest} a high resolution logger provides")]
+    ChannelOutOfRange { channel: u16, lowest: u16, highest: u16 },
+
+    #[error("channel {channel} is configured, but this unit is an ADC-{variant} which has only {available}")]
+    ChannelNotOnThisUnit { channel: u16, variant: String, available: u16 },
+
     // ---- Calculated channels -----------------------------------------------
     #[error("the equation for '{channel}' could not be read: {reason}. Equation: {equation}")]
     InvalidEquation { channel: String, equation: String, reason: String },

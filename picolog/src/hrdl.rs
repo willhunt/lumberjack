@@ -29,6 +29,20 @@ const FAILED: i16 = 0;
 pub const MIN_CHANNEL: u16 = 1;
 pub const MAX_CHANNEL: u16 = 16;
 
+/// Whether a channel can be the primary of a differential pair.
+///
+/// A differential input pairs a channel with the one above it, so the primary
+/// is always odd and the even channel beside it is consumed by the pair. An
+/// ADC-20 therefore offers eight single ended inputs or four differential ones.
+pub fn can_be_differential(channel: u16) -> bool {
+    channel % 2 == 1
+}
+
+/// The channel consumed alongside `primary` when it is used differentially.
+pub fn differential_partner(primary: u16) -> u16 {
+    primary + 1
+}
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
@@ -222,6 +236,8 @@ pub enum Error {
         settings: SettingsError,
     },
     ChannelOutOfRange(u16),
+    /// The unit reported a model this crate does not know the shape of.
+    UnknownVariant { variant: String },
 }
 
 impl fmt::Display for Error {
@@ -248,6 +264,11 @@ impl fmt::Display for Error {
                 formatter,
                 "channel {} is outside the {}..={} the unit provides",
                 channel, MIN_CHANNEL, MAX_CHANNEL
+            ),
+            Error::UnknownVariant { variant } => write!(
+                formatter,
+                "the unit reports variant {}, which is neither an ADC-20 nor an ADC-24",
+                variant
             ),
         }
     }
@@ -347,6 +368,19 @@ impl Hrdl {
             return Err(Error::NoUnitFound);
         }
         Ok(Hrdl { api: api, handle: handle })
+    }
+
+    /// How many analog inputs this unit has.
+    ///
+    /// Read from the variant rather than assumed: an ADC-20 has eight and an
+    /// ADC-24 sixteen, and asking is the only way to tell them apart.
+    pub fn channel_count(&self) -> Result<u16> {
+        let variant = self.info(Info::Variant)?;
+        match variant.trim() {
+            "20" => Ok(8),
+            "24" => Ok(16),
+            other => Err(Error::UnknownVariant { variant: other.to_string() }),
+        }
     }
 
     /// A line of the unit's description, such as its serial or driver version.
@@ -677,6 +711,19 @@ mod tests {
     #[test]
     fn a_zero_count_range_does_not_divide_by_zero() {
         assert_eq!(counts_to_volts(123, 0, VoltageRange::MilliVolts2500), 0.0);
+    }
+
+    /// Pico's own example: "Primary inputs for differential pairs are odd
+    /// channel numbers eg 1, 3, 5, etc. Their corresponding secondary numbers
+    /// are primary channel number + 1".
+    #[test]
+    fn only_odd_channels_can_lead_a_differential_pair() {
+        assert!(can_be_differential(1));
+        assert!(can_be_differential(7));
+        assert!(!can_be_differential(2));
+        assert!(!can_be_differential(8));
+        assert_eq!(differential_partner(1), 2);
+        assert_eq!(differential_partner(7), 8);
     }
 
     #[test]
