@@ -283,6 +283,10 @@ cargo check --all-targets
 `cargo check` on its own does not build examples, so run it with
 `--all-targets` or `cargo test` to catch breakage there.
 
+This crate is a member of the workspace at the repository root, so build output
+goes to `../target` and `cargo test --workspace` from there covers picolog and
+choptui as well.
+
 # Todo
 - Add pico technology TC-08.
 - Post processing.
