@@ -7,11 +7,10 @@
 
 use crate::monitor::Update;
 use crate::plot_config::{ self, Plot, PlotConfig };
-use chrono::{ DateTime, Utc };
 use lumberdaq::calculated::ChannelRef;
 use lumberdaq::config::DaqConfig;
 use lumberdaq::datapoint::DataPoint;
-use ratatui::crossterm::event::{ self, Event, KeyCode, KeyEventKind, KeyModifiers };
+use ratatui::crossterm::event::{ self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers };
 use ratatui::layout::{ Alignment, Constraint, Layout, Rect };
 use ratatui::style::{ Color, Modifier, Style };
 use ratatui::text::{ Line, Span };
@@ -66,6 +65,8 @@ const MAX_POINTS: usize = 50_000;
 
 /// The rows of the Settings tab, in order.
 const SETTINGS: [&str; 2] = ["Plot history", "Plot layout"];
+const HISTORY_ROW: usize = 0;
+const LAYOUT_ROW: usize = 1;
 
 /// Room for the pointer showing which channel the keys act on. Always there,
 /// so a row does not shift sideways when it becomes the selected one.
@@ -136,10 +137,6 @@ pub struct State {
     /// When the current recording started, and nothing when not recording.
     /// The header counts from here.
     pub recording: Option<Instant>,
-    /// The first reading seen, which the time axis counts from. Taken from the
-    /// data rather than from when the display started, so the axis says when a
-    /// reading was taken and not when it was drawn.
-    origin: Option<DateTime<Utc>>,
 }
 
 impl State {
@@ -178,16 +175,12 @@ impl State {
             history_seconds: HISTORY_DEFAULT,
             setting: 0,
             recording: None,
-            origin: None,
         }
     }
 
     pub fn apply(&mut self, update: Update) {
         match update {
             Update::Data { device, channel, points } => {
-                if self.origin.is_none() {
-                    self.origin = points.first().map(|point| point.datetime);
-                }
                 let window = self.history_seconds as i64;
                 if let Some(row) = self.channel_mut(&device, &channel) {
                     row.latest = points.last().map(|point| point.value);
@@ -238,15 +231,6 @@ impl State {
             .nth(selected)
         {
             row.plot = plot;
-        }
-    }
-
-    /// Seconds from the first reading of the run, which is what a time axis
-    /// counts in.
-    fn seconds(&self, point: &DataPoint) -> f64 {
-        match self.origin {
-            Some(origin) => (point.datetime - origin).num_milliseconds() as f64 / 1000.0,
-            None => 0.0,
         }
     }
 
@@ -700,12 +684,34 @@ fn render_plot(frame: &mut Frame, area: Rect, state: &State, number: usize) {
 
     let members: Vec<&ChannelRow> =
         state.channels().filter(|channel| channel.plot == Some(number)).collect();
+
+    // Now, for this plot, is its newest reading rather than the clock. The axis
+    // then says when a reading was taken and not when it happened to be drawn,
+    // and a plot of recorded data means the same thing as a plot of live data.
+    let newest = members
+        .iter()
+        .filter_map(|channel| channel.history.back())
+        .map(|point| point.datetime)
+        .max();
+
     // Built before the datasets because a dataset borrows its points, and they
     // have to outlive the widget that reads them.
     let series: Vec<Vec<(f64, f64)>> = members
         .iter()
         .map(|channel| {
-            channel.history.iter().map(|point| (state.seconds(point), point.value)).collect()
+            channel
+                .history
+                .iter()
+                .map(|point| {
+                    let ago = match newest {
+                        Some(newest) => {
+                            (point.datetime - newest).num_milliseconds() as f64 / 1000.0
+                        }
+                        None => 0.0,
+                    };
+                    (ago, point.value)
+                })
+                .collect()
         })
         .collect();
 
@@ -714,13 +720,13 @@ fn render_plot(frame: &mut Frame, area: Rect, state: &State, number: usize) {
         Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
     ));
 
-    match span(&series) {
+    match vertical(&series) {
         None => frame.render_widget(
             Paragraph::new(Span::styled(" waiting for readings", Style::new().fg(DIM)))
                 .block(block),
             drawing,
         ),
-        Some((across, up)) => {
+        Some(up) => {
             let datasets: Vec<Dataset> = series
                 .iter()
                 .enumerate()
@@ -732,10 +738,19 @@ fn render_plot(frame: &mut Frame, area: Rect, state: &State, number: usize) {
                         .data(points)
                 })
                 .collect();
+            // The whole window, always, whether or not it has filled up yet.
+            // An axis that grew with the data would never agree with the
+            // setting that produced it, and a trace filling in from the right
+            // is what a plot of live readings is expected to do.
+            let window = state.history_seconds as f64;
             frame.render_widget(
                 Chart::new(datasets)
                     .block(block)
-                    .x_axis(axis(across, 1, "s"))
+                    .x_axis(
+                        Axis::default().style(Style::new().fg(DIM)).bounds([-window, 0.0]).labels(
+                            [format!("-{}", duration_label(state.history_seconds)), "now".to_string()],
+                        ),
+                    )
                     .y_axis(axis(up, 2, "")),
                 drawing,
             );
@@ -769,30 +784,27 @@ fn render_plot(frame: &mut Frame, area: Rect, state: &State, number: usize) {
     );
 }
 
-/// What a plot has to cover, or None when nothing has arrived to draw.
-fn span(series: &[Vec<(f64, f64)>]) -> Option<([f64; 2], [f64; 2])> {
-    let mut across = [f64::INFINITY, f64::NEG_INFINITY];
+/// How high a plot has to be, or None when nothing has arrived to draw.
+///
+/// Only the value axis. The time axis is the window, which is a setting rather
+/// than something to be worked out from the data.
+fn vertical(series: &[Vec<(f64, f64)>]) -> Option<[f64; 2]> {
     let mut up = [f64::INFINITY, f64::NEG_INFINITY];
-    for (x, y) in series.iter().flatten() {
-        across = [across[0].min(*x), across[1].max(*x)];
+    for (_, y) in series.iter().flatten() {
         up = [up[0].min(*y), up[1].max(*y)];
     }
-    if !across[0].is_finite() {
+    if !up[0].is_finite() {
         return None;
     }
     // A reading that has not moved, or only one of them, would otherwise be
     // asked to fill an axis of no height at all.
-    up = match up[1] - up[0] < f64::EPSILON {
+    Some(match up[1] - up[0] < f64::EPSILON {
         true => [up[0] - 1.0, up[1] + 1.0],
         false => {
             let room = (up[1] - up[0]) * 0.05;
             [up[0] - room, up[1] + room]
         }
-    };
-    if across[1] - across[0] < f64::EPSILON {
-        across[1] = across[0] + 1.0;
-    }
-    Some((across, up))
+    })
 }
 
 fn axis(bounds: [f64; 2], decimals: usize, suffix: &str) -> Axis<'static> {
@@ -853,7 +865,7 @@ fn settings(frame: &mut Frame, area: Rect, state: &State) {
 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " + and - change a setting.  Enter saves the plot layout.",
+            " Left and right change a setting.  Enter saves the plot layout.  Tab moves on.",
             Style::new().fg(DIM),
         ))),
         hint,
@@ -899,6 +911,102 @@ pub fn run(
     outcome
 }
 
+/// What a key press does.
+///
+/// Kept out of the loop so it can be tested. A display whose keys are only ever
+/// exercised by hand is one where a key that quietly does nothing goes
+/// unnoticed, which is exactly what happened to the Settings tab.
+pub fn press(state: &mut State, key: KeyEvent, stop: &AtomicBool, recording: &AtomicBool) {
+    // Raw mode means Ctrl-C arrives as a key rather than as a signal, so unless
+    // it is handled here it does nothing at all. It should end a run the way it
+    // does everywhere else.
+    let interrupt =
+        key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
+    if interrupt {
+        stop.store(true, Ordering::Relaxed);
+        return;
+    }
+
+    // A tab that wants a key for itself gets first refusal, so that a page can
+    // use the arrow keys for its own values without them ceasing to move
+    // between tabs everywhere else.
+    if state.tab == 3 && settings_key(state, key.code) {
+        return;
+    }
+    if state.tab == 0 && devices_key(state, key.code) {
+        return;
+    }
+
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Esc => stop.store(true, Ordering::Relaxed),
+        // On any tab. Whether a run is being recorded is not a property of
+        // whichever page happens to be showing.
+        KeyCode::Char('r') => {
+            let starting = !recording.load(Ordering::Relaxed);
+            recording.store(starting, Ordering::Relaxed);
+            state.recording = starting.then(Instant::now);
+            state.note(
+                match starting {
+                    true => "recording started",
+                    false => "recording stopped",
+                }
+                .to_string(),
+            );
+        }
+        KeyCode::Tab | KeyCode::Right => state.tab = (state.tab + 1) % TABS.len(),
+        KeyCode::BackTab | KeyCode::Left => state.tab = (state.tab + TABS.len() - 1) % TABS.len(),
+        _ => {}
+    }
+}
+
+/// Keys the Settings tab takes for itself. `true` when it used one.
+///
+/// Left and right adjust the setting being pointed at, which is what anyone
+/// reaches for on a page of values. Tab still moves between tabs, so nothing is
+/// unreachable.
+fn settings_key(state: &mut State, code: KeyCode) -> bool {
+    match code {
+        KeyCode::Up => state.move_setting(-1),
+        KeyCode::Down => state.move_setting(1),
+        KeyCode::Left | KeyCode::Char('-') if state.setting == HISTORY_ROW => {
+            state.adjust_history(-1)
+        }
+        KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('=')
+            if state.setting == HISTORY_ROW =>
+        {
+            state.adjust_history(1)
+        }
+        KeyCode::Enter if state.setting == LAYOUT_ROW => {
+            let saved = plot_config::write(&state.project, &state.plot_config());
+            state.note(match saved {
+                Ok(path) => format!("plot layout saved to {}", path.display()),
+                Err(problem) => problem,
+            });
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Keys the Devices tab takes for itself. `true` when it used one.
+fn devices_key(state: &mut State, code: KeyCode) -> bool {
+    match code {
+        KeyCode::Up => state.move_selection(-1),
+        KeyCode::Down => state.move_selection(1),
+        // Zero takes a channel off a plot, there being no plot zero to put it
+        // on.
+        KeyCode::Char(digit) if digit.is_ascii_digit() => {
+            state.assign(match digit.to_digit(10).unwrap_or(0) as usize {
+                0 => None,
+                plot => Some(plot),
+            })
+        }
+        KeyCode::Char('-') => state.assign(None),
+        _ => return false,
+    }
+    true
+}
+
 fn watch(
     terminal: &mut ratatui::DefaultTerminal,
     updates: Receiver<Update>,
@@ -935,69 +1043,7 @@ fn watch(
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
-                // Raw mode means Ctrl-C arrives as a key rather than as a
-                // signal, so unless it is handled here it does nothing at all.
-                // It should end a run the way it does everywhere else.
-                let interrupt = key.modifiers.contains(KeyModifiers::CONTROL)
-                    && key.code == KeyCode::Char('c');
-                match key.code {
-                    _ if interrupt => stop.store(true, Ordering::Relaxed),
-                    KeyCode::Char('q') | KeyCode::Esc => stop.store(true, Ordering::Relaxed),
-                    // On any tab. Whether a run is being recorded is not a
-                    // property of whichever page happens to be showing.
-                    KeyCode::Char('r') => {
-                        let starting = !recording.load(Ordering::Relaxed);
-                        recording.store(starting, Ordering::Relaxed);
-                        state.recording = starting.then(Instant::now);
-                        state.note(
-                            match starting {
-                                true => "recording started",
-                                false => "recording stopped",
-                            }
-                            .to_string(),
-                        );
-                    }
-                    KeyCode::Tab | KeyCode::Right => state.tab = (state.tab + 1) % TABS.len(),
-                    KeyCode::BackTab | KeyCode::Left => {
-                        state.tab = (state.tab + TABS.len() - 1) % TABS.len()
-                    }
-                    // Only where the pointer they move is on screen. Changing
-                    // something invisible from another tab is worse than the
-                    // key doing nothing at all.
-                    KeyCode::Up if state.tab == 0 => state.move_selection(-1),
-                    KeyCode::Down if state.tab == 0 => state.move_selection(1),
-                    KeyCode::Up if state.tab == 3 => state.move_setting(-1),
-                    KeyCode::Down if state.tab == 3 => state.move_setting(1),
-                    // Not the arrow keys, which move between tabs everywhere
-                    // else and should not stop doing so on one page.
-                    KeyCode::Char('+') | KeyCode::Char('=') if state.tab == 3 => {
-                        if state.setting == 0 {
-                            state.adjust_history(1);
-                        }
-                    }
-                    KeyCode::Char('-') if state.tab == 3 => {
-                        if state.setting == 0 {
-                            state.adjust_history(-1);
-                        }
-                    }
-                    KeyCode::Enter if state.tab == 3 && state.setting == 1 => {
-                        let saved = plot_config::write(&state.project, &state.plot_config());
-                        state.note(match saved {
-                            Ok(path) => format!("plot layout saved to {}", path.display()),
-                            Err(problem) => problem,
-                        });
-                    }
-                    KeyCode::Char(key) if state.tab == 0 && key.is_ascii_digit() => {
-                        // Zero takes a channel off a plot, there being no plot
-                        // zero to put it on.
-                        state.assign(match key.to_digit(10).unwrap_or(0) as usize {
-                            0 => None,
-                            plot => Some(plot),
-                        });
-                    }
-                    KeyCode::Char('-') if state.tab == 0 => state.assign(None),
-                    _ => {}
-                }
+                press(state, key, stop, recording);
             }
         }
     }
@@ -1007,6 +1053,7 @@ fn watch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::DateTime;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -1085,7 +1132,6 @@ mod tests {
             history_seconds: HISTORY_DEFAULT,
             setting: 0,
             recording: None,
-            origin: None,
         }
     }
 
@@ -1249,8 +1295,9 @@ mod tests {
         // to be switched back to for it.
         assert!(screen.contains("Flow"), "{}", screen);
         assert!(screen.contains("5.000 L/min"), "{}", screen);
-        // Four seconds of readings, and a y axis spanning what arrived.
-        assert!(screen.contains("4.0s"), "{}", screen);
+        // A few seconds of readings sit at the right hand end of the window,
+        // which is what a plot of live data does.
+        assert!(screen.contains("now"), "{}", screen);
     }
 
     #[test]
@@ -1475,6 +1522,154 @@ mod tests {
         assert_eq!(clock(Duration::from_secs(59)), "00:00:59");
         assert_eq!(clock(Duration::from_secs(600)), "00:10:00");
         assert_eq!(clock(Duration::from_secs(86_399)), "23:59:59");
+    }
+
+    /// Press a key, the way the loop does.
+    fn press_key(state: &mut State, code: KeyCode) {
+        let stop = AtomicBool::new(false);
+        let recording = AtomicBool::new(false);
+        press(state, KeyEvent::new(code, KeyModifiers::NONE), &stop, &recording);
+    }
+
+    #[test]
+    fn the_history_setting_can_actually_be_changed() {
+        // The keys were never tested, and the ones the Settings tab needed did
+        // not reach it. Left and right are what anyone reaches for on a page of
+        // values, and they were switching tabs instead.
+        let mut state = state();
+        state.tab = 3;
+        assert_eq!(state.history_seconds, 60);
+
+        press_key(&mut state, KeyCode::Right);
+        assert_eq!(state.history_seconds, 120, "right should lengthen the window");
+        assert_eq!(state.tab, 3, "and should not have moved off the tab");
+
+        press_key(&mut state, KeyCode::Left);
+        press_key(&mut state, KeyCode::Left);
+        assert_eq!(state.history_seconds, 30);
+        assert_eq!(state.tab, 3);
+    }
+
+    #[test]
+    fn plus_and_minus_change_it_too() {
+        let mut state = state();
+        state.tab = 3;
+        press_key(&mut state, KeyCode::Char('+'));
+        assert_eq!(state.history_seconds, 120);
+        press_key(&mut state, KeyCode::Char('-'));
+        assert_eq!(state.history_seconds, 60);
+    }
+
+    #[test]
+    fn tab_still_moves_on_from_a_page_that_wants_the_arrow_keys() {
+        // Otherwise the Settings tab would be a place you could not leave.
+        let mut state = state();
+        state.tab = 3;
+        press_key(&mut state, KeyCode::Tab);
+        assert_eq!(state.tab, 0);
+        press_key(&mut state, KeyCode::BackTab);
+        assert_eq!(state.tab, 3);
+    }
+
+    #[test]
+    fn the_arrow_keys_still_move_between_tabs_everywhere_else() {
+        let mut state = state();
+        state.tab = 1;
+        press_key(&mut state, KeyCode::Right);
+        assert_eq!(state.tab, 2);
+        press_key(&mut state, KeyCode::Left);
+        assert_eq!(state.tab, 1);
+    }
+
+    #[test]
+    fn the_settings_pointer_moves_and_the_keys_follow_it() {
+        let mut state = state();
+        state.tab = 3;
+        press_key(&mut state, KeyCode::Down);
+        assert_eq!(state.setting, LAYOUT_ROW);
+        // The window is not the row being pointed at, so it must not move.
+        press_key(&mut state, KeyCode::Right);
+        assert_eq!(state.history_seconds, 60);
+    }
+
+    #[test]
+    fn enter_on_the_layout_row_saves_it() {
+        let mut state = state();
+        state.project = scratch("enter_saves");
+        state.tab = 3;
+        state.setting = LAYOUT_ROW;
+        plot(&mut state, 0, 1);
+        press_key(&mut state, KeyCode::Enter);
+        assert!(plot_config::read(&state.project).unwrap().is_some());
+        assert!(state.log.iter().any(|line| line.contains("saved")), "{:?}", state.log);
+    }
+
+    #[test]
+    fn the_devices_tab_keys_reach_it() {
+        let mut state = state();
+        press_key(&mut state, KeyCode::Down);
+        assert_eq!(state.selected, 1);
+        press_key(&mut state, KeyCode::Char('2'));
+        assert_eq!(state.devices[0].channels[1].plot, Some(2));
+        press_key(&mut state, KeyCode::Char('0'));
+        assert_eq!(state.devices[0].channels[1].plot, None);
+    }
+
+    #[test]
+    fn a_digit_on_another_tab_does_not_quietly_change_a_plot() {
+        let mut state = state();
+        state.tab = 2;
+        press_key(&mut state, KeyCode::Char('3'));
+        assert!(state.channels().all(|channel| channel.plot.is_none()));
+    }
+
+    #[test]
+    fn ctrl_c_stops_the_run_from_any_tab() {
+        let mut state = state();
+        state.tab = 3;
+        let stop = AtomicBool::new(false);
+        let recording = AtomicBool::new(false);
+        press(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &stop,
+            &recording,
+        );
+        assert!(stop.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn r_records_from_any_tab_including_one_that_takes_its_own_keys() {
+        let mut state = state();
+        state.tab = 3;
+        let stop = AtomicBool::new(false);
+        let recording = AtomicBool::new(false);
+        press(&mut state, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE), &stop, &recording);
+        assert!(recording.load(Ordering::Relaxed));
+        assert!(state.recording.is_some());
+    }
+
+    #[test]
+    fn the_time_axis_is_the_window_and_says_so() {
+        // The complaint that started this: a plot showing seconds since the run
+        // began never agreed with a setting given as a length of time.
+        let mut state = state();
+        state.apply(Update::Data {
+            device: "Rig".to_string(),
+            channel: "Flow".to_string(),
+            points: readings(&[1.0, 4.0, 2.0]),
+        });
+        plot(&mut state, 0, 1);
+        state.tab = 1;
+
+        let screen = rendered(&state, 90, 20);
+        println!("{}", screen);
+        assert!(screen.contains("-1m"), "axis should be the window: {}", screen);
+        assert!(screen.contains("now"), "{}", screen);
+
+        state.history_seconds = 300;
+        let screen = rendered(&state, 90, 20);
+        assert!(screen.contains("-5m"), "axis should follow the setting: {}", screen);
     }
 
     #[test]

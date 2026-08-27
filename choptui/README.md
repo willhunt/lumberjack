@@ -72,8 +72,11 @@ the reading is coloured as the line it produces.
 Several channels can share a plot, and the legend beside it is also the reading,
 so watching a plot does not mean switching back to Devices for the numbers.
 
-The time axis counts from the first reading of the run rather than from when the
-display started, so it says when a reading was taken and not when it was drawn.
+The time axis is the history window, always, whether or not it has filled up
+yet: a trace fills in from the right the way a plot of live readings should, and
+the axis agrees with the setting that produced it. Its right hand end is the
+newest reading rather than the clock, so it says when a reading was taken and
+not when it was drawn.
 
 History is kept for every channel, plotted or not. It costs a few kilobytes
 each, and it means putting a channel on a plot shows what it has been doing
@@ -113,8 +116,11 @@ and the plots carry on regardless.
 │     Plot layout       save to plot_config.json                         │
 │                                                                        │
 └────────────────────────────────────────────────────────────────────────┘
- + and - change a setting.  Enter saves the plot layout.
+ Left and right change a setting.  Enter saves the plot layout.  Tab moves on.
 ```
+
+Left and right change the setting being pointed at; `Tab` still moves on, so a
+page that takes the arrow keys is not one you get stuck on.
 
 **Plot history** is how far back a plot goes: 10s, 30s, 1m, 2m, 5m, 10m or 30m.
 Shortening it takes effect at once rather than once enough new readings have
@@ -169,7 +175,8 @@ display opening when that device is not there.
 | `Up`, `Down` | point at a channel, on the Devices tab |
 | `1` to `9` | put the channel on that plot |
 | `0` or `-` | take it off |
-| `+`, `-` | change a setting, on the Settings tab |
+| `Left`, `Right` | change a setting, on the Settings tab |
+| `+`, `-` | the same, for anyone who reaches for those |
 | `Enter` | save the plot layout, on the Settings tab |
 | `q`, `Esc`, `Ctrl-C` | stop the run and quit |
 
