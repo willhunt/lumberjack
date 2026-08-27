@@ -163,6 +163,8 @@ dependencies = [
  "chrono",
  "lumberdaq",
  "ratatui",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

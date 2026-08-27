@@ -7,6 +7,7 @@
 //! to. Recording arrives with the button in the header.
 
 mod monitor;
+mod plot_config;
 mod ui;
 
 use lumberdaq::daq::Daq;
@@ -44,7 +45,17 @@ fn run() -> lumberdaq::Result<()> {
     // so creates the results file before anything has been recorded. Watching a
     // rig should leave nothing behind.
     let config = Project::new(&directory).read_config()?;
-    let state = ui::State::from_config(&directory, &config);
+    let mut state = ui::State::from_config(&directory, &config);
+
+    // A layout saved last time, if there is one. Never a reason not to open:
+    // a plot naming a channel this setup does not have is said so in the log
+    // and skipped, since the alternative is refusing to show a rig because of
+    // something that only affects how it is drawn.
+    match plot_config::read(&directory) {
+        Ok(Some(saved)) => state.apply_plot_config(saved),
+        Ok(None) => {}
+        Err(problem) => state.note(problem),
+    }
     // Read before the config is handed over, so the recorder knows what format
     // to write when somebody eventually asks it to.
     let storage = config.storage;

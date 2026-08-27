@@ -75,14 +75,13 @@ so watching a plot does not mean switching back to Devices for the numbers.
 The time axis counts from the first reading of the run rather than from when the
 display started, so it says when a reading was taken and not when it was drawn.
 
-A channel keeps its last 600 readings, whether or not it is plotted — it costs a
-few kilobytes, and it means putting a channel on a plot shows what it has been
-doing rather than an empty box that fills up slowly. That also means the window a
-plot covers is set by the sample rate: 600 readings is twelve seconds at 50 Hz
-and half a second at 1 kHz. The axis says which.
+History is kept for every channel, plotted or not. It costs a few kilobytes
+each, and it means putting a channel on a plot shows what it has been doing
+rather than an empty box that fills up slowly.
 
-Plot assignments last as long as the session. Saving them is what the Settings
-tab is for, and it is not built yet.
+Plotting changes nothing about what is recorded. Every channel is written
+whether or not it is on a plot: the plots are a window onto data being captured
+regardless.
 
 ## Recording
 
@@ -105,6 +104,62 @@ a file of its own each time, named for when it started.
 Devices keep reading whether or not anything is being recorded, so the readings
 and the plots carry on regardless.
 
+## Settings
+
+```
+┌ Settings ──────────────────────────────────────────────────────────────┐
+│                                                                        │
+│ >   Plot history      1m                                               │
+│     Plot layout       save to plot_config.json                         │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+ + and - change a setting.  Enter saves the plot layout.
+```
+
+**Plot history** is how far back a plot goes: 10s, 30s, 1m, 2m, 5m, 10m or 30m.
+Shortening it takes effect at once rather than once enough new readings have
+arrived to push the old ones out.
+
+It is a length of the data, measured from the newest reading rather than from
+the clock, so it means the same thing whether the display has been open for ten
+seconds or all night. A channel will not hold more than 50,000 readings whatever
+the window says — over eight minutes at 100 Hz, under one at 1 kHz — and where
+that cap bites, the setting says what is really being held:
+
+```
+│ >   Plot history      10m   (holding 47s at this rate)                 │
+```
+
+**Plot layout** writes `plot_config.json` beside the project config, and it is
+read back the next time the display opens.
+
+## The plot layout file
+
+Kept apart from `config.json`, which describes the rig. What a rig measures and
+what somebody happens to be looking at are different things.
+
+```json
+{
+  "version": 1,
+  "history_seconds": 300,
+  "plots": [
+    { "number": 1, "channels": [ { "device": "Rig", "channel": "Flow" } ] },
+    { "number": 3, "channels": [ { "device": "Rig", "channel": "Pressure" } ] }
+  ]
+}
+```
+
+A channel is named the way the library names one, so a plot says which channel
+it draws in the same words a calculated channel uses for an input.
+
+The plot number is written out rather than taken from the position in the list.
+It is what somebody typed, and renumbering plot 3 to plot 2 to close a gap is
+the sort of thing that makes a program feel untrusted.
+
+A layout naming a channel the setup does not have is noted in the log and
+skipped, not refused. A layout saved with a device attached should not stop the
+display opening when that device is not there.
+
 ## Keys
 
 | | |
@@ -114,12 +169,17 @@ and the plots carry on regardless.
 | `Up`, `Down` | point at a channel, on the Devices tab |
 | `1` to `9` | put the channel on that plot |
 | `0` or `-` | take it off |
+| `+`, `-` | change a setting, on the Settings tab |
+| `Enter` | save the plot layout, on the Settings tab |
 | `q`, `Esc`, `Ctrl-C` | stop the run and quit |
 
 ## What it does not do yet
 
-Settings is empty. Plot assignments last as long as the session; saving them
-needs a file format that outlives a plot number per channel.
+Plots have no titles and no fixed axis ranges. Both belong in the layout file
+when there is something to set them with; adding a field to it does not need a
+version bump, removing or repurposing one does. Note that this is the only thing
+writing that file, so if something else starts writing fields of its own they
+would be dropped the next time this saves.
 
 If the sink cannot be created when recording starts - a database held open by
 something else, a full disk - the error ends the run rather than being reported

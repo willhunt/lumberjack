@@ -6,7 +6,9 @@
 //! that takes a moment does not delay a write to disk.
 
 use crate::monitor::Update;
+use crate::plot_config::{ self, Plot, PlotConfig };
 use chrono::{ DateTime, Utc };
+use lumberdaq::calculated::ChannelRef;
 use lumberdaq::config::DaqConfig;
 use lumberdaq::datapoint::DataPoint;
 use ratatui::crossterm::event::{ self, Event, KeyCode, KeyEventKind, KeyModifiers };
@@ -42,13 +44,28 @@ const COUNT_WIDTH: u16 = 7;
 /// width of every box on the screen.
 const REASON_SHOWN: usize = 28;
 
-/// How many readings a channel keeps for drawing.
+/// How long a plot keeps readings for, to choose between on the Settings tab.
 ///
-/// A plot is at most a couple of hundred columns wide and braille gives two
-/// dots per column, so beyond this there is nothing more to see. It also means
-/// the window a plot covers is set by the sample rate: 600 readings is twelve
-/// seconds at 50 Hz and half a second at 1 kHz. The axis says which.
-const HISTORY_KEPT: usize = 600;
+/// Steps rather than a free number: the point of the setting is how far back a
+/// plot goes, and a handful of round answers covers that better than nudging a
+/// number one second at a time.
+const HISTORY_CHOICES: [u64; 7] = [10, 30, 60, 120, 300, 600, 1800];
+
+/// A minute, which is long enough to see a trend and short enough to see a
+/// change.
+const HISTORY_DEFAULT: u64 = 60;
+
+/// The most readings a channel will hold, whatever the window asks for.
+///
+/// A window is a length of time, and a fast rig fills it with far more points
+/// than a plot a couple of hundred columns wide can show. This is over eight
+/// minutes at 100 Hz and under a minute at 1 kHz; past it the window really in
+/// force is shorter than the one asked for, and the Settings tab says so rather
+/// than quietly claiming otherwise.
+const MAX_POINTS: usize = 50_000;
+
+/// The rows of the Settings tab, in order.
+const SETTINGS: [&str; 2] = ["Plot history", "Plot layout"];
 
 /// Room for the pointer showing which channel the keys act on. Always there,
 /// so a row does not shift sideways when it becomes the selected one.
@@ -110,6 +127,12 @@ pub struct State {
     /// Which channel the Devices tab is pointing at, counted across every
     /// device rather than within one.
     pub selected: usize,
+    /// How far back a plot goes, in seconds. One of [`HISTORY_CHOICES`] once
+    /// changed from here, but any value loads, so a layout written elsewhere is
+    /// honoured as it was written.
+    pub history_seconds: u64,
+    /// Which row the Settings tab is pointing at.
+    pub setting: usize,
     /// When the current recording started, and nothing when not recording.
     /// The header counts from here.
     pub recording: Option<Instant>,
@@ -152,6 +175,8 @@ impl State {
             log: VecDeque::new(),
             tab: 0,
             selected: 0,
+            history_seconds: HISTORY_DEFAULT,
+            setting: 0,
             recording: None,
             origin: None,
         }
@@ -163,15 +188,12 @@ impl State {
                 if self.origin.is_none() {
                     self.origin = points.first().map(|point| point.datetime);
                 }
+                let window = self.history_seconds as i64;
                 if let Some(row) = self.channel_mut(&device, &channel) {
                     row.latest = points.last().map(|point| point.value);
                     row.readings += points.len();
-                    for point in points {
-                        if row.history.len() == HISTORY_KEPT {
-                            row.history.pop_front();
-                        }
-                        row.history.push_back(point);
-                    }
+                    row.history.extend(points);
+                    trim(&mut row.history, window);
                 }
             }
             Update::Connected { device } => {
@@ -228,6 +250,92 @@ impl State {
         }
     }
 
+    /// Move the pointer on the Settings tab.
+    pub fn move_setting(&mut self, by: isize) {
+        let last = SETTINGS.len() as isize - 1;
+        self.setting = (self.setting as isize + by).clamp(0, last) as usize;
+    }
+
+    /// Step the history window to the next choice up or down.
+    ///
+    /// Relative to whatever it is now rather than by an index, so a window
+    /// loaded from a file that is not one of the choices still moves sensibly
+    /// instead of jumping.
+    pub fn adjust_history(&mut self, by: isize) {
+        let now = self.history_seconds;
+        self.history_seconds = match by > 0 {
+            true => HISTORY_CHOICES.iter().find(|choice| **choice > now),
+            false => HISTORY_CHOICES.iter().rev().find(|choice| **choice < now),
+        }
+        .copied()
+        .unwrap_or(now);
+        // Shortening it should take effect now, not once enough new readings
+        // have arrived to push the old ones out.
+        let window = self.history_seconds as i64;
+        for device in self.devices.iter_mut() {
+            for channel in device.channels.iter_mut() {
+                trim(&mut channel.history, window);
+            }
+        }
+    }
+
+    /// The layout as it stands, ready to be written out.
+    pub fn plot_config(&self) -> PlotConfig {
+        let mut plots: BTreeMap<usize, Vec<ChannelRef>> = BTreeMap::new();
+        for device in self.devices.iter() {
+            for channel in device.channels.iter() {
+                if let Some(number) = channel.plot {
+                    plots.entry(number).or_default().push(ChannelRef {
+                        device: device.name.clone(),
+                        channel: channel.name.clone(),
+                    });
+                }
+            }
+        }
+        PlotConfig {
+            version: plot_config::VERSION,
+            history_seconds: self.history_seconds,
+            plots: plots
+                .into_iter()
+                .map(|(number, channels)| Plot { number: number, channels: channels })
+                .collect(),
+        }
+    }
+
+    /// Put channels back on the plots a saved layout names.
+    ///
+    /// A channel the layout names but this setup does not have is noted and
+    /// skipped. Refusing to open a display because of something that only
+    /// affects how a rig is drawn would be the wrong way round, and a layout
+    /// saved with a device attached is worth keeping for when it is again.
+    pub fn apply_plot_config(&mut self, saved: PlotConfig) {
+        self.history_seconds = saved.history_seconds;
+        for plot in saved.plots.iter() {
+            for reference in plot.channels.iter() {
+                match self.channel_mut(&reference.device, &reference.channel) {
+                    Some(row) => row.plot = Some(plot.number),
+                    None => self.note(format!(
+                        "{} names {}, which this setup does not have",
+                        plot_config::FILE,
+                        reference
+                    )),
+                }
+            }
+        }
+    }
+
+    /// The shortest span any channel is really holding, where the cap has bitten.
+    fn capped_window(&self) -> Option<u64> {
+        self.channels()
+            .filter(|channel| channel.history.len() >= MAX_POINTS)
+            .filter_map(|channel| {
+                let first = channel.history.front()?.datetime;
+                let last = channel.history.back()?.datetime;
+                Some((last - first).num_seconds().max(0) as u64)
+            })
+            .min()
+    }
+
     fn channel_mut(&mut self, device: &str, channel: &str) -> Option<&mut ChannelRow> {
         self.devices
             .iter_mut()
@@ -243,11 +351,37 @@ impl State {
         }
     }
 
-    fn note(&mut self, message: String) {
+    pub fn note(&mut self, message: String) {
         if self.log.len() == LOG_KEPT {
             self.log.pop_front();
         }
         self.log.push_back(message);
+    }
+}
+
+/// Drop what has fallen outside the window, oldest first.
+///
+/// Measured from the newest reading rather than from the clock, so the window
+/// is a span of the data and not of the time the display has been open.
+fn trim(history: &mut VecDeque<DataPoint>, window: i64) {
+    if let Some(newest) = history.back().map(|point| point.datetime) {
+        while history
+            .front()
+            .is_some_and(|point| (newest - point.datetime).num_seconds() > window)
+        {
+            history.pop_front();
+        }
+    }
+    while history.len() > MAX_POINTS {
+        history.pop_front();
+    }
+}
+
+/// A length of time, the short way.
+fn duration_label(seconds: u64) -> String {
+    match seconds % 60 == 0 && seconds >= 60 {
+        true => format!("{}m", seconds / 60),
+        false => format!("{}s", seconds),
     }
 }
 
@@ -278,6 +412,7 @@ pub fn draw(frame: &mut Frame, state: &State) {
         0 => devices(frame, body, state),
         1 => plots(frame, body, state),
         2 => log(frame, body, state),
+        3 => settings(frame, body, state),
         _ => frame.render_widget(
             Paragraph::new(Span::styled(
                 format!("{} is not built yet.", TABS[state.tab]),
@@ -667,6 +802,64 @@ fn axis(bounds: [f64; 2], decimals: usize, suffix: &str) -> Axis<'static> {
     ])
 }
 
+fn settings(frame: &mut Frame, area: Rect, state: &State) {
+    let [box_area, hint] =
+        Layout::vertical([Constraint::Length(SETTINGS.len() as u16 + 4), Constraint::Min(0)])
+            .areas(area);
+
+    let values = [
+        // Say what is really being held when the cap has cut the window short,
+        // rather than showing a number that is not true.
+        match state.capped_window() {
+            Some(held) if held + 1 < state.history_seconds => format!(
+                "{}   (holding {} at this rate)",
+                duration_label(state.history_seconds),
+                duration_label(held)
+            ),
+            _ => duration_label(state.history_seconds),
+        },
+        format!("save to {}", plot_config::FILE),
+    ];
+
+    let rows = SETTINGS.iter().zip(values.iter()).enumerate().map(|(index, (name, value))| {
+        let selected = state.setting == index;
+        Row::new(vec![
+            Span::styled(if selected { ">" } else { " " }, Style::new().fg(Color::White)),
+            Span::styled(
+                *name,
+                match selected {
+                    true => Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+                    false => Style::new().fg(ACCENT),
+                },
+            ),
+            Span::styled(value.clone(), Style::new().fg(Color::White)),
+        ])
+    });
+
+    frame.render_widget(
+        Table::new(rows, [Constraint::Length(POINTER_WIDTH), Constraint::Length(16), Constraint::Min(10)])
+            .column_spacing(GAP)
+            .block(
+                Block::bordered()
+                    .border_style(Style::new().fg(ACCENT))
+                    .padding(Padding::symmetric(1, 1))
+                    .title(Span::styled(
+                        " Settings ",
+                        Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+                    )),
+            ),
+        box_area,
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            " + and - change a setting.  Enter saves the plot layout.",
+            Style::new().fg(DIM),
+        ))),
+        hint,
+    );
+}
+
 fn log(frame: &mut Frame, area: Rect, state: &State) {
     // Newest last, and only as many as fit, so the latest is always on screen
     // without any scrolling to build yet.
@@ -773,6 +966,27 @@ fn watch(
                     // key doing nothing at all.
                     KeyCode::Up if state.tab == 0 => state.move_selection(-1),
                     KeyCode::Down if state.tab == 0 => state.move_selection(1),
+                    KeyCode::Up if state.tab == 3 => state.move_setting(-1),
+                    KeyCode::Down if state.tab == 3 => state.move_setting(1),
+                    // Not the arrow keys, which move between tabs everywhere
+                    // else and should not stop doing so on one page.
+                    KeyCode::Char('+') | KeyCode::Char('=') if state.tab == 3 => {
+                        if state.setting == 0 {
+                            state.adjust_history(1);
+                        }
+                    }
+                    KeyCode::Char('-') if state.tab == 3 => {
+                        if state.setting == 0 {
+                            state.adjust_history(-1);
+                        }
+                    }
+                    KeyCode::Enter if state.tab == 3 && state.setting == 1 => {
+                        let saved = plot_config::write(&state.project, &state.plot_config());
+                        state.note(match saved {
+                            Ok(path) => format!("plot layout saved to {}", path.display()),
+                            Err(problem) => problem,
+                        });
+                    }
                     KeyCode::Char(key) if state.tab == 0 && key.is_ascii_digit() => {
                         // Zero takes a channel off a plot, there being no plot
                         // zero to put it on.
@@ -839,6 +1053,14 @@ mod tests {
             .collect()
     }
 
+    /// A directory of this test own, so tests writing files cannot collide.
+    fn scratch(name: &str) -> String {
+        let directory = std::env::temp_dir().join(format!("choptui_{}", name));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        directory.to_string_lossy().to_string()
+    }
+
     fn state() -> State {
         State {
             project: "test_projects/scaled".to_string(),
@@ -860,6 +1082,8 @@ mod tests {
             log: VecDeque::new(),
             tab: 0,
             selected: 0,
+            history_seconds: HISTORY_DEFAULT,
+            setting: 0,
             recording: None,
             origin: None,
         }
@@ -1075,18 +1299,143 @@ mod tests {
     }
 
     #[test]
-    fn history_is_bounded() {
+    fn history_is_kept_for_the_window_and_no_longer() {
+        // Readings a second apart, so a minute of window is a minute of them.
         let mut state = state();
-        let values: Vec<f64> = (0..HISTORY_KEPT + 50).map(|n| n as f64).collect();
+        let values: Vec<f64> = (0..200).map(|n| n as f64).collect();
         state.apply(Update::Data {
             device: "Rig".to_string(),
             channel: "Flow".to_string(),
             points: readings(&values),
         });
         let history = &state.devices[0].channels[0].history;
-        assert_eq!(history.len(), HISTORY_KEPT);
+        // Sixty seconds back from the newest, inclusive of both ends.
+        assert_eq!(history.len(), HISTORY_DEFAULT as usize + 1);
         // The oldest go, not the newest.
-        assert_eq!(history.back().unwrap().value, (HISTORY_KEPT + 49) as f64);
+        assert_eq!(history.back().unwrap().value, 199.0);
+        assert_eq!(history.front().unwrap().value, 139.0);
+    }
+
+    #[test]
+    fn shortening_the_window_takes_effect_at_once() {
+        // Otherwise it would only appear to work once enough new readings had
+        // arrived to push the old ones out, which on a slow rig is a long wait.
+        let mut state = state();
+        let values: Vec<f64> = (0..200).map(|n| n as f64).collect();
+        state.apply(Update::Data {
+            device: "Rig".to_string(),
+            channel: "Flow".to_string(),
+            points: readings(&values),
+        });
+        state.adjust_history(-1);
+        assert_eq!(state.history_seconds, 30);
+        assert_eq!(state.devices[0].channels[0].history.len(), 31);
+    }
+
+    #[test]
+    fn the_window_steps_through_the_choices_and_stops_at_the_ends() {
+        let mut state = state();
+        state.adjust_history(1);
+        assert_eq!(state.history_seconds, 120);
+        for _ in 0..20 {
+            state.adjust_history(1);
+        }
+        assert_eq!(state.history_seconds, *HISTORY_CHOICES.last().unwrap());
+        for _ in 0..20 {
+            state.adjust_history(-1);
+        }
+        assert_eq!(state.history_seconds, HISTORY_CHOICES[0]);
+    }
+
+    #[test]
+    fn a_window_from_a_file_is_honoured_as_written_and_still_steps() {
+        // A layout written elsewhere may hold a value that is not one of the
+        // choices. Rounding it on load would quietly change somebody settings.
+        let mut state = state();
+        state.apply_plot_config(PlotConfig {
+            version: 1,
+            history_seconds: 45,
+            plots: vec![],
+        });
+        assert_eq!(state.history_seconds, 45);
+        state.adjust_history(1);
+        assert_eq!(state.history_seconds, 60, "the next choice above 45");
+    }
+
+    #[test]
+    fn a_layout_survives_being_written_out_and_read_back() {
+        let mut original = state();
+        plot(&mut original, 0, 1);
+        plot(&mut original, 2, 3);
+        original.history_seconds = 300;
+
+        let directory = scratch("round_trip");
+        let written = plot_config::write(&directory, &original.plot_config()).unwrap();
+        assert!(written.ends_with(plot_config::FILE));
+
+        let mut reopened = state();
+        reopened.apply_plot_config(plot_config::read(&directory).unwrap().unwrap());
+        assert_eq!(reopened.history_seconds, 300);
+        assert_eq!(reopened.devices[0].channels[0].plot, Some(1));
+        assert_eq!(reopened.devices[0].channels[1].plot, None);
+        // The number typed, not the position in the list: plot 3 stays plot 3.
+        assert_eq!(reopened.devices[1].channels[0].plot, Some(3));
+        assert!(reopened.log.is_empty(), "{:?}", reopened.log);
+    }
+
+    #[test]
+    fn a_layout_naming_a_channel_this_setup_lacks_is_noted_not_refused() {
+        // A layout saved with a device attached should not stop the display
+        // opening when that device is not there.
+        let mut state = state();
+        state.apply_plot_config(PlotConfig {
+            version: 1,
+            history_seconds: 60,
+            plots: vec![Plot {
+                number: 1,
+                channels: vec![ChannelRef {
+                    device: "Ghost".to_string(),
+                    channel: "Nothing".to_string(),
+                }],
+            }],
+        });
+        assert_eq!(state.log.len(), 1);
+        assert!(state.log[0].contains("Ghost/Nothing"), "{}", state.log[0]);
+    }
+
+    #[test]
+    fn no_saved_layout_is_not_a_failure() {
+        // The ordinary case for a project only ever recorded from the CLI.
+        let directory = scratch("never_saved");
+        assert!(plot_config::read(&directory).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_layout_that_will_not_parse_is_a_failure() {
+        // It was meant to say something, so silence would be the wrong answer.
+        let directory = scratch("nonsense");
+        std::fs::write(plot_config::path(&directory), "{ not json").unwrap();
+        assert!(plot_config::read(&directory).is_err());
+    }
+
+    #[test]
+    fn the_settings_tab_shows_what_each_setting_is() {
+        let mut state = state();
+        state.tab = 3;
+        let screen = rendered(&state, 74, 16);
+        println!("{}", screen);
+        assert!(screen.contains("Plot history"), "{}", screen);
+        assert!(screen.contains("1m"), "{}", screen);
+        assert!(screen.contains(plot_config::FILE), "{}", screen);
+    }
+
+    #[test]
+    fn a_length_of_time_reads_the_short_way() {
+        assert_eq!(duration_label(10), "10s");
+        assert_eq!(duration_label(30), "30s");
+        assert_eq!(duration_label(60), "1m");
+        assert_eq!(duration_label(1800), "30m");
+        assert_eq!(duration_label(45), "45s");
     }
 
     #[test]
