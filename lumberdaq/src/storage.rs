@@ -5,6 +5,8 @@ use crate::daq::DaqInfo;
 use crate::datapoint::DataPoint;
 use crate::device::DeviceInfo;
 use serde::{ Deserialize, Serialize };
+use std::sync::atomic::{ AtomicBool, Ordering };
+use std::sync::Arc;
 
 /// Storage is split into two halves.
 ///
@@ -177,6 +179,115 @@ impl DataSink for Fanout {
     }
 }
 
+
+/// A sink that writes only while it is armed.
+///
+/// A run holds its sink for the whole run, so nothing can hand one over partway
+/// through when somebody presses record. This is attached from the start
+/// instead and does nothing until the flag is set, which from the outside comes
+/// to the same thing.
+///
+/// The sink underneath is built on arming rather than up front, so a session
+/// that is only being watched leaves no results file behind at all. It is built
+/// afresh each time, so stopping and starting again gives a second recording
+/// rather than more of the first: what that means is the caller's to decide,
+/// since a database can keep both runs in one file while a CSV needs another
+/// file.
+///
+/// ```no_run
+/// use lumberdaq::storage::Recorder;
+/// # use lumberdaq::config::StorageFormat;
+/// # use std::sync::atomic::AtomicBool;
+/// # use std::sync::Arc;
+/// let recording = Arc::new(AtomicBool::new(false));
+/// let project = lumberdaq::project::Project::new("my_project");
+/// let recorder = Recorder::new(
+///     Arc::clone(&recording),
+///     Box::new(move || project.sink_for(StorageFormat::Csv, "first")),
+/// );
+/// ```
+pub struct Recorder {
+    armed: Arc<AtomicBool>,
+    /// Built on arming, dropped on stopping. `None` whenever not recording.
+    sink: Option<Box<dyn DataSink>>,
+    make: Box<dyn FnMut() -> Result<Box<dyn DataSink>>>,
+    /// Kept from `init`, because the sink that needs telling what is being
+    /// measured does not exist yet, and may never.
+    config: Option<DaqConfig>,
+    started: usize,
+}
+
+impl Recorder {
+    pub fn new(
+        armed: Arc<AtomicBool>,
+        make: Box<dyn FnMut() -> Result<Box<dyn DataSink>>>,
+    ) -> Recorder {
+        Recorder { armed: armed, sink: None, make: make, config: None, started: 0 }
+    }
+
+    /// How many recordings have been started since the run began.
+    pub fn started(&self) -> usize {
+        self.started
+    }
+
+    /// Whether anything is being written at this moment.
+    pub fn recording(&self) -> bool {
+        self.sink.is_some()
+    }
+
+    /// Bring the sink into line with the flag.
+    ///
+    /// Called from both `write_batch` and `flush`, because a run being watched
+    /// with every device disconnected produces no batches at all, and pressing
+    /// record then would otherwise do nothing until data arrived.
+    fn follow(&mut self) -> Result<()> {
+        match (self.armed.load(Ordering::Relaxed), self.sink.is_some()) {
+            (true, false) => {
+                let mut sink = (self.make)()?;
+                if let Some(config) = &self.config {
+                    sink.init(config)?;
+                }
+                self.sink = Some(sink);
+                self.started += 1;
+            }
+            (false, true) => {
+                // Stopping flushes. Whatever is buffered belongs to the
+                // recording that has just ended, not to the next one.
+                if let Some(mut sink) = self.sink.take() {
+                    sink.flush()?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+impl DataSink for Recorder {
+    fn init(&mut self, config: &DaqConfig) -> Result<()> {
+        self.config = Some(config.clone());
+        Ok(())
+    }
+
+    fn write_batch(&mut self, batch: &Batch) -> Result<()> {
+        self.follow()?;
+        match &mut self.sink {
+            Some(sink) => sink.write_batch(batch),
+            // Watching rather than recording. Not an error: it is the whole
+            // point of the thing.
+            None => Ok(()),
+        }
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.follow()?;
+        match &mut self.sink {
+            Some(sink) => sink.flush(),
+            None => Ok(()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,12 +335,119 @@ mod tests {
         Box::new(Spy { name: name, log: Rc::clone(log), fails: fails })
     }
 
+    /// A recorder whose sink is a spy, counting how many were built.
+    fn recorder(armed: &Arc<AtomicBool>, log: &Log, made: &Rc<RefCell<usize>>) -> Recorder {
+        let log = Rc::clone(log);
+        let made = Rc::clone(made);
+        Recorder::new(
+            Arc::clone(armed),
+            Box::new(move || {
+                *made.borrow_mut() += 1;
+                Ok(spy("recording", &log, false))
+            }),
+        )
+    }
+
+    fn config() -> DaqConfig {
+        serde_json::from_str(
+            r#"{ "info": { "name": "Test", "author": "-" }, "devices": [] }"#,
+        )
+        .unwrap()
+    }
+
     fn batch(channel: &str) -> Batch {
         Batch {
             device: "Rig".to_string(),
             channel: channel.to_string(),
             datapoints: vec![DataPoint { datetime: chrono::Utc::now(), value: 1.0 }],
         }
+    }
+
+    #[test]
+    fn a_recorder_writes_nothing_until_it_is_armed() {
+        // A session only being watched should leave no results file behind, so
+        // the sink underneath is not even built.
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let armed = Arc::new(AtomicBool::new(false));
+        let made = Rc::new(RefCell::new(0));
+        let mut recorder = recorder(&armed, &log, &made);
+
+        recorder.write_batch(&batch("Flow")).unwrap();
+        recorder.flush().unwrap();
+        assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+        assert_eq!(*made.borrow(), 0, "nothing should have been built");
+        assert_eq!(recorder.started(), 0);
+        assert!(!recorder.recording());
+    }
+
+    #[test]
+    fn arming_builds_the_sink_and_tells_it_what_is_being_measured() {
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let armed = Arc::new(AtomicBool::new(false));
+        let made = Rc::new(RefCell::new(0));
+        let mut recorder = recorder(&armed, &log, &made);
+        recorder.init(&config()).unwrap();
+
+        armed.store(true, Ordering::Relaxed);
+        recorder.write_batch(&batch("Flow")).unwrap();
+
+        // init on a sink built long after the run started, or it would be
+        // writing data with no header to say what any of it is.
+        assert_eq!(log.borrow().as_slice(), ["recording init", "recording Flow"]);
+        assert_eq!(recorder.started(), 1);
+        assert!(recorder.recording());
+    }
+
+    #[test]
+    fn stopping_flushes_and_lets_go_of_the_sink() {
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let armed = Arc::new(AtomicBool::new(true));
+        let made = Rc::new(RefCell::new(0));
+        let mut recorder = recorder(&armed, &log, &made);
+        recorder.write_batch(&batch("Flow")).unwrap();
+
+        armed.store(false, Ordering::Relaxed);
+        recorder.flush().unwrap();
+        // Buffered data belongs to the recording that just ended.
+        assert!(log.borrow().contains(&"recording flush".to_string()), "{:?}", log.borrow());
+        assert!(!recorder.recording());
+
+        // And nothing more is written afterwards.
+        recorder.write_batch(&batch("Pressure")).unwrap();
+        assert!(!log.borrow().contains(&"recording Pressure".to_string()), "{:?}", log.borrow());
+    }
+
+    #[test]
+    fn starting_again_is_a_second_recording_not_more_of_the_first() {
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let armed = Arc::new(AtomicBool::new(false));
+        let made = Rc::new(RefCell::new(0));
+        let mut recorder = recorder(&armed, &log, &made);
+
+        for _ in 0..2 {
+            armed.store(true, Ordering::Relaxed);
+            recorder.write_batch(&batch("Flow")).unwrap();
+            armed.store(false, Ordering::Relaxed);
+            recorder.flush().unwrap();
+        }
+        // A fresh sink each time, which is what gives CSV a new file and
+        // SQLite a new run.
+        assert_eq!(*made.borrow(), 2);
+        assert_eq!(recorder.started(), 2);
+    }
+
+    #[test]
+    fn a_start_is_noticed_even_when_no_data_is_arriving() {
+        // Every device disconnected produces no batches at all. Pressing record
+        // then must still start something, or it would look broken.
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let armed = Arc::new(AtomicBool::new(false));
+        let made = Rc::new(RefCell::new(0));
+        let mut recorder = recorder(&armed, &log, &made);
+
+        armed.store(true, Ordering::Relaxed);
+        recorder.flush().unwrap();
+        assert!(recorder.recording());
     }
 
     #[test]

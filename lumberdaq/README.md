@@ -119,6 +119,35 @@ being written to, not a second path through the library.
 cargo run --example two_sinks -- test_projects/scaled
 ```
 
+### Starting and stopping recording
+
+A run holds its sink for the whole run, so nothing can hand one over partway
+through when somebody presses record. A `Recorder` is attached from the start
+instead and writes only while a flag is set:
+
+```rust
+let recording = Arc::new(AtomicBool::new(false));
+daq.set_sink(Box::new(Recorder::new(
+    Arc::clone(&recording),
+    Box::new(move || project.sink_for(storage, &label())),
+)))?;
+```
+
+The sink underneath is built when recording starts rather than up front, so a
+session that is only being watched leaves no results file behind at all. It is
+built afresh each time, so stopping and starting gives a second recording rather
+than more of the first. `Project::sink_for` decides what that means per format:
+a database keeps every run in the one file and its runs table tells them apart,
+while a CSV gets a file of its own each time, since nothing in a CSV can say
+where one recording ends and the next begins.
+
+Devices keep reading throughout. What is not recorded is still acquired, which
+is what lets a display show live readings before anyone has pressed anything.
+
+```cmd
+cargo run --example record_in_bursts -- test_projects/scaled
+```
+
 ## Project directory
 
 ```

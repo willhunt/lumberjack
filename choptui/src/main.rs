@@ -11,7 +11,7 @@ mod ui;
 
 use lumberdaq::daq::Daq;
 use lumberdaq::project::Project;
-use lumberdaq::storage::Fanout;
+use lumberdaq::storage::{ Fanout, Recorder };
 use monitor::{ Monitor, Update };
 use std::sync::atomic::{ AtomicBool, Ordering };
 use std::sync::mpsc;
@@ -45,11 +45,36 @@ fn run() -> lumberdaq::Result<()> {
     // rig should leave nothing behind.
     let config = Project::new(&directory).read_config()?;
     let state = ui::State::from_config(&directory, &config);
+    // Read before the config is handed over, so the recorder knows what format
+    // to write when somebody eventually asks it to.
+    let storage = config.storage;
     let mut daq = Daq::from_config(config)?;
 
     let (updates, from_run) = mpsc::channel::<Update>();
+
+    // Set by the display when record is pressed, read by the recorder on the
+    // collecting thread. A flag rather than a message because there is nothing
+    // to queue: what matters is whether it is on now.
+    let recording = Arc::new(AtomicBool::new(false));
+    let sinks = Project::new(&directory);
     daq.set_sink(Box::new(
-        Fanout::new().and("display", Box::new(Monitor::new(updates.clone()))),
+        Fanout::new()
+            .and("display", Box::new(Monitor::new(updates.clone())))
+            .and(
+                "recording",
+                Box::new(Recorder::new(
+                    Arc::clone(&recording),
+                    // Named for when it started. A database ignores the label
+                    // and keeps its runs in the one file; a CSV gets a file of
+                    // its own each time, which is what stopping and starting
+                    // has to mean when a format cannot say where one recording
+                    // ends and the next begins.
+                    Box::new(move || {
+                        let label = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+                        sinks.sink_for(storage, &label)
+                    }),
+                )),
+            ),
     ))?;
 
     // Connecting before the display starts, so the first frame already shows
@@ -71,7 +96,8 @@ fn run() -> lumberdaq::Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let display = {
         let stop = Arc::clone(&stop);
-        thread::spawn(move || ui::run(from_run, state, &stop))
+        let recording = Arc::clone(&recording);
+        thread::spawn(move || ui::run(from_run, state, &stop, &recording))
     };
 
     let outcome = daq.run(&stop, &mut |event| {

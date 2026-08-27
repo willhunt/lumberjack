@@ -102,6 +102,22 @@ impl Project {
         })
     }
 
+    /// A sink for one recording among several in a session.
+    ///
+    /// A database keeps every run in the one file and its runs table tells them
+    /// apart, so the path does not change. A CSV has no such thing, so each
+    /// recording is given a file of its own named by `label`, along with the
+    /// sidecar describing it.
+    pub fn sink_for(&self, format: StorageFormat, label: &str) -> Result<Box<dyn DataSink>> {
+        Ok(match format {
+            StorageFormat::Sqlite => Box::new(SqliteSink::new(&self.database_path())?),
+            StorageFormat::Csv => Box::new(CsvSink::new(
+                &self.directory.join(format!("results-{}.csv", label)),
+                &self.directory.join(format!("results-{}.json", label)),
+            )?),
+        })
+    }
+
     pub fn write_config(&self, config: &DaqConfig) -> Result<()> {
         write_configuration_file(&self.config_path(), config)
     }

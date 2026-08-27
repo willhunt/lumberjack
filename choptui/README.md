@@ -25,7 +25,7 @@ readings have arrived. Each device shows whether it is connected, and why not if
 it is not.
 
 ```
-LUMBERJACK  test_projects/scaled                             not recording
+LUMBERJACK  test_projects/scaled           not recording  record (r)
 Devices  -  Plots  -  Log  -  Settings
 
 ┌ Rig ─────────────────────────────── Connected ┐
@@ -84,11 +84,33 @@ and half a second at 1 kHz. The axis says which.
 Plot assignments last as long as the session. Saving them is what the Settings
 tab is for, and it is not built yet.
 
+## Recording
+
+`r` starts and stops recording, from any tab. The header counts how long the
+current recording has been going:
+
+```
+LUMBERJACK  test_projects/scaled              REC 00:01:23  stop (r)
+```
+
+Until then nothing is written at all: a project directory that is only being
+watched still holds nothing but its `config.json`. The results file is created
+when recording starts, not when the display opens.
+
+Stopping and starting again gives a second recording rather than more of the
+first. What that means depends on the format the project asks for: a database
+keeps both in the one file and its runs table tells them apart, while CSV gets
+a file of its own each time, named for when it started.
+
+Devices keep reading whether or not anything is being recorded, so the readings
+and the plots carry on regardless.
+
 ## Keys
 
 | | |
 |---|---|
 | `Tab`, `Left`, `Right` | move between tabs |
+| `r` | start or stop recording |
 | `Up`, `Down` | point at a channel, on the Devices tab |
 | `1` to `9` | put the channel on that plot |
 | `0` or `-` | take it off |
@@ -96,12 +118,13 @@ tab is for, and it is not built yet.
 
 ## What it does not do yet
 
-**Nothing is recorded.** It connects, reads and displays. Deliberately not
-`lumberdaq::open`, which attaches the project's sink and so creates the results
-file before anything has been recorded — watching a rig should leave nothing
-behind. The record button in the header is the next piece.
+Settings is empty. Plot assignments last as long as the session; saving them
+needs a file format that outlives a plot number per channel.
 
-Settings is empty.
+If the sink cannot be created when recording starts - a database held open by
+something else, a full disk - the error ends the run rather than being reported
+and shrugged off. That is what every other sink failure does, but it is a harsh
+answer to a key press.
 
 ## How it is put together
 

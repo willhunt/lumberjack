@@ -110,6 +110,9 @@ pub struct State {
     /// Which channel the Devices tab is pointing at, counted across every
     /// device rather than within one.
     pub selected: usize,
+    /// When the current recording started, and nothing when not recording.
+    /// The header counts from here.
+    pub recording: Option<Instant>,
     /// The first reading seen, which the time axis counts from. Taken from the
     /// data rather than from when the display started, so the axis says when a
     /// reading was taken and not when it was drawn.
@@ -149,6 +152,7 @@ impl State {
             log: VecDeque::new(),
             tab: 0,
             selected: 0,
+            recording: None,
             origin: None,
         }
     }
@@ -263,11 +267,8 @@ pub fn draw(frame: &mut Frame, state: &State) {
         ])),
         header,
     );
-    // The record button and its timer belong here. Not built yet, and saying so
-    // is better than an ornament that does nothing.
     frame.render_widget(
-        Paragraph::new(Span::styled("not recording", Style::new().fg(DIM)))
-            .alignment(Alignment::Right),
+        Paragraph::new(recording_state(state)).alignment(Alignment::Right),
         header,
     );
 
@@ -286,6 +287,30 @@ pub fn draw(frame: &mut Frame, state: &State) {
             body,
         ),
     }
+}
+
+/// The record button and how long it has been going.
+fn recording_state(state: &State) -> Line<'static> {
+    match state.recording {
+        Some(since) => Line::from(vec![
+            Span::styled(
+                "REC ",
+                Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(clock(since.elapsed()), Style::new().fg(Color::White)),
+            Span::styled("  stop (r)", Style::new().fg(DIM)),
+        ]),
+        None => Line::from(vec![
+            Span::styled("not recording", Style::new().fg(DIM)),
+            Span::styled("  record (r)", Style::new().fg(ACCENT)),
+        ]),
+    }
+}
+
+/// How long a recording has been going, as a clock.
+fn clock(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    format!("{:02}:{:02}:{:02}", seconds / 3600, (seconds / 60) % 60, seconds % 60)
 }
 
 fn tab_bar(selected: usize) -> Line<'static> {
@@ -669,9 +694,14 @@ fn log(frame: &mut Frame, area: Rect, state: &State) {
 /// Setting `stop` is how the display asks for the run to end: the same flag
 /// Ctrl-C sets, so the devices wind down and the sink gets its final flush
 /// rather than the process being killed with data still buffered.
-pub fn run(updates: Receiver<Update>, mut state: State, stop: &AtomicBool) -> std::io::Result<()> {
+pub fn run(
+    updates: Receiver<Update>,
+    mut state: State,
+    stop: &AtomicBool,
+    recording: &AtomicBool,
+) -> std::io::Result<()> {
     let mut terminal = ratatui::init();
-    let outcome = watch(&mut terminal, updates, &mut state, stop);
+    let outcome = watch(&mut terminal, updates, &mut state, stop, recording);
     ratatui::restore();
     outcome
 }
@@ -681,6 +711,7 @@ fn watch(
     updates: Receiver<Update>,
     state: &mut State,
     stop: &AtomicBool,
+    recording: &AtomicBool,
 ) -> std::io::Result<()> {
     let mut last_drawn = Instant::now() - TICK;
     while !stop.load(Ordering::Relaxed) {
@@ -719,6 +750,20 @@ fn watch(
                 match key.code {
                     _ if interrupt => stop.store(true, Ordering::Relaxed),
                     KeyCode::Char('q') | KeyCode::Esc => stop.store(true, Ordering::Relaxed),
+                    // On any tab. Whether a run is being recorded is not a
+                    // property of whichever page happens to be showing.
+                    KeyCode::Char('r') => {
+                        let starting = !recording.load(Ordering::Relaxed);
+                        recording.store(starting, Ordering::Relaxed);
+                        state.recording = starting.then(Instant::now);
+                        state.note(
+                            match starting {
+                                true => "recording started",
+                                false => "recording stopped",
+                            }
+                            .to_string(),
+                        );
+                    }
                     KeyCode::Tab | KeyCode::Right => state.tab = (state.tab + 1) % TABS.len(),
                     KeyCode::BackTab | KeyCode::Left => {
                         state.tab = (state.tab + TABS.len() - 1) % TABS.len()
@@ -815,6 +860,7 @@ mod tests {
             log: VecDeque::new(),
             tab: 0,
             selected: 0,
+            recording: None,
             origin: None,
         }
     }
@@ -1054,6 +1100,32 @@ mod tests {
         assert_eq!(positions[0], Some(0));
         assert_eq!(positions[1], None);
         assert_eq!(positions[2], Some(1));
+    }
+
+    #[test]
+    fn the_header_offers_to_record_when_it_is_not() {
+        let screen = rendered(&state(), 74, 16);
+        assert!(screen.contains("not recording"), "{}", screen);
+        assert!(screen.contains("record (r)"), "{}", screen);
+    }
+
+    #[test]
+    fn the_header_counts_a_recording_as_it_goes() {
+        let mut state = state();
+        state.recording = Some(Instant::now() - Duration::from_secs(3671));
+        let screen = rendered(&state, 74, 16);
+        assert!(screen.contains("REC"), "{}", screen);
+        // An hour, a minute and eleven seconds.
+        assert!(screen.contains("01:01:11"), "{}", screen);
+        assert!(screen.contains("stop (r)"), "{}", screen);
+    }
+
+    #[test]
+    fn a_clock_reads_as_a_clock() {
+        assert_eq!(clock(Duration::from_secs(0)), "00:00:00");
+        assert_eq!(clock(Duration::from_secs(59)), "00:00:59");
+        assert_eq!(clock(Duration::from_secs(600)), "00:10:00");
+        assert_eq!(clock(Duration::from_secs(86_399)), "23:59:59");
     }
 
     #[test]

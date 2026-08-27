@@ -6,6 +6,9 @@
 # setup and stays tracked; the results a run produces do not.
 results.csv
 results.json
+# One recording among several, from a session that started and stopped.
+results-*.csv
+results-*.json
 *.hdf
 results.db
 results.db-wal
