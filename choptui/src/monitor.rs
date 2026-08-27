@@ -1,6 +1,7 @@
 //! What the display is told, and the sink that tells it.
 
 use lumberdaq::config::DaqConfig;
+use lumberdaq::datapoint::DataPoint;
 use lumberdaq::session::DeviceEvent;
 use lumberdaq::storage::{ Batch, DataSink };
 use lumberdaq::Result;
@@ -16,8 +17,14 @@ pub enum Update {
     Data {
         device: String,
         channel: String,
-        value: f64,
-        added: usize,
+        /// Every reading in the batch, not just the newest.
+        ///
+        /// A number on screen only needs the last one, but a plot drawn from
+        /// one point per batch is a picture of the drain rate rather than of
+        /// the signal: a 5 Hz sine collected ten times a second would come out
+        /// as something slow and wrong. This is one allocation per batch,
+        /// which is the same order as writing the batch to disk.
+        points: Vec<DataPoint>,
     },
     Connected {
         device: String,
@@ -69,19 +76,17 @@ impl DataSink for Monitor {
     }
 
     fn write_batch(&mut self, batch: &Batch) -> Result<()> {
-        // Only the newest matters on screen; the rest are already on their way
-        // to disk by another sink.
-        if let Some(latest) = batch.datapoints.last() {
-            // Deliberately ignored. If the display has gone, the recording must
-            // carry on: a monitor failing is no reason to stop a run, and this
-            // is the whole of that policy.
-            let _ = self.updates.send(Update::Data {
-                device: batch.device.clone(),
-                channel: batch.channel.clone(),
-                value: latest.value,
-                added: batch.datapoints.len(),
-            });
+        if batch.datapoints.is_empty() {
+            return Ok(());
         }
+        // Deliberately ignored. If the display has gone, the recording must
+        // carry on: a monitor failing is no reason to stop a run, and this is
+        // the whole of that policy.
+        let _ = self.updates.send(Update::Data {
+            device: batch.device.clone(),
+            channel: batch.channel.clone(),
+            points: batch.datapoints.clone(),
+        });
         Ok(())
     }
 

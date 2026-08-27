@@ -8,4 +8,7 @@ description = "Terminal monitor for a lumberdaq acquisition"
 # that this is a separate crate, so everything it uses has to be public API.
 [dependencies]
 lumberdaq = { path = "../lumberdaq" }
+# Not a new crate in the tree: lumberdaq already uses it, and a DataPoint
+# carries a chrono timestamp, so anything reading one needs to name the type.
+chrono = "0.4"
 ratatui = "0.30.2"

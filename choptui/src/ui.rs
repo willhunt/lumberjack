@@ -6,14 +6,17 @@
 //! that takes a moment does not delay a write to disk.
 
 use crate::monitor::Update;
+use chrono::{ DateTime, Utc };
 use lumberdaq::config::DaqConfig;
+use lumberdaq::datapoint::DataPoint;
 use ratatui::crossterm::event::{ self, Event, KeyCode, KeyEventKind, KeyModifiers };
 use ratatui::layout::{ Alignment, Constraint, Layout, Rect };
 use ratatui::style::{ Color, Modifier, Style };
 use ratatui::text::{ Line, Span };
-use ratatui::widgets::{ Block, Padding, Paragraph, Row, Table };
+use ratatui::symbols::Marker;
+use ratatui::widgets::{ Axis, Block, Chart, Dataset, GraphType, Padding, Paragraph, Row, Table };
 use ratatui::Frame;
-use std::collections::VecDeque;
+use std::collections::{ BTreeMap, VecDeque };
 use std::sync::atomic::{ AtomicBool, Ordering };
 use std::sync::mpsc::{ Receiver, RecvTimeoutError };
 use std::time::{ Duration, Instant };
@@ -39,6 +42,34 @@ const COUNT_WIDTH: u16 = 7;
 /// width of every box on the screen.
 const REASON_SHOWN: usize = 28;
 
+/// How many readings a channel keeps for drawing.
+///
+/// A plot is at most a couple of hundred columns wide and braille gives two
+/// dots per column, so beyond this there is nothing more to see. It also means
+/// the window a plot covers is set by the sample rate: 600 readings is twelve
+/// seconds at 50 Hz and half a second at 1 kHz. The axis says which.
+const HISTORY_KEPT: usize = 600;
+
+/// Room for the pointer showing which channel the keys act on. Always there,
+/// so a row does not shift sideways when it becomes the selected one.
+const POINTER_WIDTH: u16 = 2;
+
+/// Room for a plot number in brackets.
+const PLOT_WIDTH: u16 = 3;
+
+/// Room for the legend beside a plot: a channel name and its latest reading.
+const LEGEND_WIDTH: u16 = 30;
+
+/// Series colours, in the order channels are added to a plot.
+const SERIES: [Color; 6] = [
+    Color::LightBlue,
+    Color::LightGreen,
+    Color::LightYellow,
+    Color::LightMagenta,
+    Color::LightCyan,
+    Color::White,
+];
+
 const ACCENT: Color = Color::LightRed;
 const DIM: Color = Color::DarkGray;
 
@@ -55,6 +86,14 @@ pub struct ChannelRow {
     /// None until the first reading arrives, which is not the same as zero.
     pub latest: Option<f64>,
     pub readings: usize,
+    /// Which plot this is drawn on, if any. Set from the Devices tab.
+    pub plot: Option<usize>,
+    /// Recent readings, oldest first, for drawing.
+    ///
+    /// Kept for every channel rather than only the plotted ones. It costs a
+    /// few kilobytes each, and it means assigning a channel to a plot shows
+    /// what it has been doing rather than an empty box that fills up slowly.
+    pub history: VecDeque<DataPoint>,
 }
 
 pub struct DeviceRow {
@@ -68,6 +107,13 @@ pub struct State {
     pub devices: Vec<DeviceRow>,
     pub log: VecDeque<String>,
     pub tab: usize,
+    /// Which channel the Devices tab is pointing at, counted across every
+    /// device rather than within one.
+    pub selected: usize,
+    /// The first reading seen, which the time axis counts from. Taken from the
+    /// data rather than from when the display started, so the axis says when a
+    /// reading was taken and not when it was drawn.
+    origin: Option<DateTime<Utc>>,
 }
 
 impl State {
@@ -94,21 +140,34 @@ impl State {
                             unit: info.unit,
                             latest: None,
                             readings: 0,
+                            plot: None,
+                            history: VecDeque::new(),
                         })
                         .collect(),
                 })
                 .collect(),
             log: VecDeque::new(),
             tab: 0,
+            selected: 0,
+            origin: None,
         }
     }
 
     pub fn apply(&mut self, update: Update) {
         match update {
-            Update::Data { device, channel, value, added } => {
+            Update::Data { device, channel, points } => {
+                if self.origin.is_none() {
+                    self.origin = points.first().map(|point| point.datetime);
+                }
                 if let Some(row) = self.channel_mut(&device, &channel) {
-                    row.latest = Some(value);
-                    row.readings += added;
+                    row.latest = points.last().map(|point| point.value);
+                    row.readings += points.len();
+                    for point in points {
+                        if row.history.len() == HISTORY_KEPT {
+                            row.history.pop_front();
+                        }
+                        row.history.push_back(point);
+                    }
                 }
             }
             Update::Connected { device } => {
@@ -125,6 +184,43 @@ impl State {
             // A problem is not a disconnection: the port is fine and the device
             // keeps being read, so the status is left alone.
             Update::Problem { device, message } => self.note(format!("{}: {}", device, message)),
+        }
+    }
+
+    /// Every channel in the setup, in the order they appear on screen.
+    pub fn channels(&self) -> impl Iterator<Item = &ChannelRow> {
+        self.devices.iter().flat_map(|device| device.channels.iter())
+    }
+
+    /// Move the pointer on the Devices tab, staying inside the list.
+    pub fn move_selection(&mut self, by: isize) {
+        let count = self.channels().count();
+        if count == 0 {
+            return;
+        }
+        let last = count as isize - 1;
+        self.selected = (self.selected as isize + by).clamp(0, last) as usize;
+    }
+
+    /// Put the channel being pointed at on a plot, or take it off one.
+    pub fn assign(&mut self, plot: Option<usize>) {
+        let selected = self.selected;
+        if let Some(row) = self
+            .devices
+            .iter_mut()
+            .flat_map(|device| device.channels.iter_mut())
+            .nth(selected)
+        {
+            row.plot = plot;
+        }
+    }
+
+    /// Seconds from the first reading of the run, which is what a time axis
+    /// counts in.
+    fn seconds(&self, point: &DataPoint) -> f64 {
+        match self.origin {
+            Some(origin) => (point.datetime - origin).num_milliseconds() as f64 / 1000.0,
+            None => 0.0,
         }
     }
 
@@ -179,6 +275,7 @@ pub fn draw(frame: &mut Frame, state: &State) {
 
     match state.tab {
         0 => devices(frame, body, state),
+        1 => plots(frame, body, state),
         2 => log(frame, body, state),
         _ => frame.render_widget(
             Paragraph::new(Span::styled(
@@ -205,6 +302,27 @@ fn tab_bar(selected: usize) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Where each channel sits among those sharing its plot, which is what decides
+/// its colour.
+///
+/// Filtering keeps the order channels are in, so a plot numbers its traces the
+/// same way this does, and the box on the Devices tab can be coloured to match
+/// the line it produces.
+fn series_positions(state: &State) -> Vec<Option<usize>> {
+    let mut counted: BTreeMap<usize, usize> = BTreeMap::new();
+    state
+        .channels()
+        .map(|channel| {
+            channel.plot.map(|plot| {
+                let next = counted.entry(plot).or_insert(0);
+                let position = *next;
+                *next += 1;
+                position
+            })
+        })
+        .collect()
+}
+
 fn devices(frame: &mut Frame, area: Rect, state: &State) {
     // Columns are sized to what is in them, and to the widest across every
     // device rather than per device, so the boxes line up with one another
@@ -224,7 +342,14 @@ fn devices(frame: &mut Frame, area: Rect, state: &State) {
         + 11;
 
     // Content, plus a border and a space of padding at each side.
-    let content = name_width + GAP + value_width + GAP + COUNT_WIDTH;
+    let content = POINTER_WIDTH
+        + name_width
+        + GAP
+        + value_width
+        + GAP
+        + PLOT_WIDTH
+        + GAP
+        + COUNT_WIDTH;
     let width = state
         .devices
         .iter()
@@ -241,15 +366,31 @@ fn devices(frame: &mut Frame, area: Rect, state: &State) {
     // when the terminal is too short shares the shortfall out among the boxes
     // until the padding has eaten every channel. A device is better shown
     // whole or not at all.
+    let positions = series_positions(state);
     let mut top = area.y;
     let mut shown = 0;
+    let mut first = 0;
     for device in state.devices.iter() {
         let height = device.channels.len() as u16 + 4;
         if top + height > area.bottom() {
             break;
         }
-        render_device(frame, Rect { x: area.x, y: top, width: width, height: height }, device,
-                      name_width, value_width);
+        // Where this device sits in the run of channels the pointer moves
+        // through, so it can tell whether the selected one is its own.
+        let pointing_at = match state.selected.checked_sub(first) {
+            Some(within) if within < device.channels.len() => Some(within),
+            _ => None,
+        };
+        render_device(
+            frame,
+            Rect { x: area.x, y: top, width: width, height: height },
+            device,
+            name_width,
+            value_width,
+            pointing_at,
+            &positions[first..first + device.channels.len()],
+        );
+        first += device.channels.len();
         // A blank line between one device and the next.
         top += height + 1;
         shown += 1;
@@ -277,6 +418,8 @@ fn render_device(
     device: &DeviceRow,
     name_width: u16,
     value_width: u16,
+    pointing_at: Option<usize>,
+    positions: &[Option<usize>],
 ) {
     let (label, colour) = status(&device.status);
 
@@ -294,9 +437,17 @@ fn render_device(
                 .right_aligned(),
         );
 
-    let rows = device.channels.iter().map(|channel| {
+    let rows = device.channels.iter().enumerate().map(|(index, channel)| {
+        let selected = pointing_at == Some(index);
+        let name = match selected {
+            true => Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+            false => Style::new().fg(ACCENT),
+        };
         Row::new(vec![
-            Span::styled(channel.name.clone(), Style::new().fg(ACCENT)),
+            // A pointer rather than a highlight, so it shows on a terminal
+            // that will not colour a background.
+            Span::styled(if selected { ">" } else { " " }, Style::new().fg(Color::White)),
+            Span::styled(channel.name.clone(), name),
             Span::styled(
                 match channel.latest {
                     Some(value) => format!("{:.3} {}", value, channel.unit),
@@ -305,6 +456,15 @@ fn render_device(
                 },
                 Style::new().fg(Color::White),
             ),
+            // Coloured as the trace it produces, so the two can be read
+            // against each other.
+            match (channel.plot, positions[index]) {
+                (Some(plot), Some(position)) => Span::styled(
+                    format!("[{}]", plot),
+                    Style::new().fg(SERIES[position % SERIES.len()]),
+                ),
+                _ => Span::styled("[-]", Style::new().fg(DIM)),
+            },
             Span::styled(channel.readings.to_string(), Style::new().fg(DIM)),
         ])
     });
@@ -313,8 +473,10 @@ fn render_device(
         Table::new(
             rows,
             [
+                Constraint::Length(POINTER_WIDTH),
                 Constraint::Length(name_width),
                 Constraint::Length(value_width),
+                Constraint::Length(PLOT_WIDTH),
                 Constraint::Length(COUNT_WIDTH),
             ],
         )
@@ -345,6 +507,139 @@ fn title_width(device: &DeviceRow) -> u16 {
     let (label, _) = status(&device.status);
     // A space each side of both, two corners, and two dashes between them.
     (device.name.chars().count() + label.chars().count() + 8) as u16
+}
+
+fn plots(frame: &mut Frame, area: Rect, state: &State) {
+    let mut numbers: Vec<usize> = state.channels().filter_map(|channel| channel.plot).collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+
+    if numbers.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "Nothing is plotted. On the Devices tab, point at a channel and press 1 to 9.",
+                Style::new().fg(DIM),
+            ))
+            .block(Block::bordered().border_style(Style::new().fg(ACCENT))),
+            area,
+        );
+        return;
+    }
+
+    // An even share each. A plot of one channel is no less worth seeing than a
+    // plot of four.
+    let heights = vec![Constraint::Ratio(1, numbers.len() as u32); numbers.len()];
+    for (number, area) in numbers.iter().zip(Layout::vertical(heights).split(area).iter()) {
+        render_plot(frame, *area, state, *number);
+    }
+}
+
+fn render_plot(frame: &mut Frame, area: Rect, state: &State, number: usize) {
+    let [drawing, legend] =
+        Layout::horizontal([Constraint::Min(20), Constraint::Length(LEGEND_WIDTH)]).areas(area);
+
+    let members: Vec<&ChannelRow> =
+        state.channels().filter(|channel| channel.plot == Some(number)).collect();
+    // Built before the datasets because a dataset borrows its points, and they
+    // have to outlive the widget that reads them.
+    let series: Vec<Vec<(f64, f64)>> = members
+        .iter()
+        .map(|channel| {
+            channel.history.iter().map(|point| (state.seconds(point), point.value)).collect()
+        })
+        .collect();
+
+    let block = Block::bordered().border_style(Style::new().fg(ACCENT)).title(Span::styled(
+        format!(" Plot {} ", number),
+        Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+    ));
+
+    match span(&series) {
+        None => frame.render_widget(
+            Paragraph::new(Span::styled(" waiting for readings", Style::new().fg(DIM)))
+                .block(block),
+            drawing,
+        ),
+        Some((across, up)) => {
+            let datasets: Vec<Dataset> = series
+                .iter()
+                .enumerate()
+                .map(|(position, points)| {
+                    Dataset::default()
+                        .marker(Marker::Braille)
+                        .graph_type(GraphType::Line)
+                        .style(Style::new().fg(SERIES[position % SERIES.len()]))
+                        .data(points)
+                })
+                .collect();
+            frame.render_widget(
+                Chart::new(datasets)
+                    .block(block)
+                    .x_axis(axis(across, 1, "s"))
+                    .y_axis(axis(up, 2, "")),
+                drawing,
+            );
+        }
+    }
+
+    // The legend doubles as the reading, which is what the Devices tab would
+    // otherwise have to be switched back to for.
+    let lines: Vec<Line> = members
+        .iter()
+        .enumerate()
+        .map(|(position, channel)| {
+            Line::from(vec![
+                Span::styled(
+                    channel.name.clone(),
+                    Style::new().fg(SERIES[position % SERIES.len()]),
+                ),
+                Span::styled(
+                    match channel.latest {
+                        Some(value) => format!("  {:.3} {}", value, channel.unit),
+                        None => format!("  --- {}", channel.unit),
+                    },
+                    Style::new().fg(Color::White),
+                ),
+            ])
+        })
+        .collect();
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::new().padding(Padding::new(1, 0, 1, 0))),
+        legend,
+    );
+}
+
+/// What a plot has to cover, or None when nothing has arrived to draw.
+fn span(series: &[Vec<(f64, f64)>]) -> Option<([f64; 2], [f64; 2])> {
+    let mut across = [f64::INFINITY, f64::NEG_INFINITY];
+    let mut up = [f64::INFINITY, f64::NEG_INFINITY];
+    for (x, y) in series.iter().flatten() {
+        across = [across[0].min(*x), across[1].max(*x)];
+        up = [up[0].min(*y), up[1].max(*y)];
+    }
+    if !across[0].is_finite() {
+        return None;
+    }
+    // A reading that has not moved, or only one of them, would otherwise be
+    // asked to fill an axis of no height at all.
+    up = match up[1] - up[0] < f64::EPSILON {
+        true => [up[0] - 1.0, up[1] + 1.0],
+        false => {
+            let room = (up[1] - up[0]) * 0.05;
+            [up[0] - room, up[1] + room]
+        }
+    };
+    if across[1] - across[0] < f64::EPSILON {
+        across[1] = across[0] + 1.0;
+    }
+    Some((across, up))
+}
+
+fn axis(bounds: [f64; 2], decimals: usize, suffix: &str) -> Axis<'static> {
+    Axis::default().style(Style::new().fg(DIM)).bounds(bounds).labels([
+        format!("{:.*}{}", decimals, bounds[0], suffix),
+        format!("{:.*}{}", decimals, bounds[1], suffix),
+    ])
 }
 
 fn log(frame: &mut Frame, area: Rect, state: &State) {
@@ -428,6 +723,20 @@ fn watch(
                     KeyCode::BackTab | KeyCode::Left => {
                         state.tab = (state.tab + TABS.len() - 1) % TABS.len()
                     }
+                    // Only where the pointer they move is on screen. Changing
+                    // something invisible from another tab is worse than the
+                    // key doing nothing at all.
+                    KeyCode::Up if state.tab == 0 => state.move_selection(-1),
+                    KeyCode::Down if state.tab == 0 => state.move_selection(1),
+                    KeyCode::Char(key) if state.tab == 0 && key.is_ascii_digit() => {
+                        // Zero takes a channel off a plot, there being no plot
+                        // zero to put it on.
+                        state.assign(match key.to_digit(10).unwrap_or(0) as usize {
+                            0 => None,
+                            plot => Some(plot),
+                        });
+                    }
+                    KeyCode::Char('-') if state.tab == 0 => state.assign(None),
                     _ => {}
                 }
             }
@@ -460,6 +769,31 @@ mod tests {
         screen
     }
 
+    fn channel(name: &str, unit: &str, latest: Option<f64>, readings: usize) -> ChannelRow {
+        ChannelRow {
+            name: name.to_string(),
+            unit: unit.to_string(),
+            latest: latest,
+            readings: readings,
+            plot: None,
+            history: VecDeque::new(),
+        }
+    }
+
+    /// Readings a second apart, starting at the epoch, so a plot has something
+    /// with a known shape to draw.
+    fn readings(values: &[f64]) -> Vec<DataPoint> {
+        let origin = DateTime::from_timestamp(0, 0).unwrap();
+        values
+            .iter()
+            .enumerate()
+            .map(|(second, value)| DataPoint {
+                datetime: origin + chrono::Duration::seconds(second as i64),
+                value: *value,
+            })
+            .collect()
+    }
+
     fn state() -> State {
         State {
             project: "test_projects/scaled".to_string(),
@@ -468,33 +802,20 @@ mod tests {
                     name: "Rig".to_string(),
                     status: Status::Connected,
                     channels: vec![
-                        ChannelRow {
-                            name: "Flow".to_string(),
-                            unit: "L/min".to_string(),
-                            latest: Some(14.5),
-                            readings: 63,
-                        },
-                        ChannelRow {
-                            name: "Pressure".to_string(),
-                            unit: "bar".to_string(),
-                            latest: Some(7.25),
-                            readings: 61,
-                        },
+                        channel("Flow", "L/min", Some(14.5), 63),
+                        channel("Pressure", "bar", Some(7.25), 61),
                     ],
                 },
                 DeviceRow {
                     name: "Missing rig".to_string(),
                     status: Status::Disconnected(Some("port not found".to_string())),
-                    channels: vec![ChannelRow {
-                        name: "Temperature".to_string(),
-                        unit: "C".to_string(),
-                        latest: None,
-                        readings: 0,
-                    }],
+                    channels: vec![channel("Temperature", "C", None, 0)],
                 },
             ],
             log: VecDeque::new(),
             tab: 0,
+            selected: 0,
+            origin: None,
         }
     }
 
@@ -532,11 +853,13 @@ mod tests {
         state.apply(Update::Data {
             device: "Rig".to_string(),
             channel: "Flow".to_string(),
-            value: 21.0,
-            added: 5,
+            points: readings(&[1.0, 2.0, 21.0]),
         });
         assert_eq!(state.devices[0].channels[0].latest, Some(21.0));
-        assert_eq!(state.devices[0].channels[0].readings, 68);
+        assert_eq!(state.devices[0].channels[0].readings, 66);
+        // Every reading is kept, not just the newest, or a plot would be
+        // drawing the drain rate rather than the signal.
+        assert_eq!(state.devices[0].channels[0].history.len(), 3);
     }
 
     #[test]
@@ -547,8 +870,7 @@ mod tests {
         state.apply(Update::Data {
             device: "Derived".to_string(),
             channel: "Delta P".to_string(),
-            value: 1.0,
-            added: 1,
+            points: readings(&[1.0]),
         });
         assert_eq!(state.devices[0].channels[0].readings, 63);
     }
@@ -606,6 +928,132 @@ mod tests {
         let screen = rendered(&state(), 74, 10);
         assert!(screen.contains("Rig"), "{}", screen);
         assert!(screen.contains("1 more below"), "{}", screen);
+    }
+
+    /// Point at a channel and put it on a plot, the way the keys do.
+    fn plot(state: &mut State, selected: usize, number: usize) {
+        state.selected = selected;
+        state.assign(Some(number));
+    }
+
+    #[test]
+    fn the_pointer_runs_through_every_device_not_just_one() {
+        let mut state = state();
+        state.move_selection(2);
+        // Two channels on the first device, so this is the second device.
+        state.assign(Some(1));
+        assert_eq!(state.devices[1].channels[0].plot, Some(1));
+    }
+
+    #[test]
+    fn the_pointer_stops_at_the_ends_rather_than_wrapping() {
+        let mut state = state();
+        state.move_selection(-1);
+        assert_eq!(state.selected, 0);
+        state.move_selection(99);
+        assert_eq!(state.selected, 2, "three channels, so the last is 2");
+    }
+
+    #[test]
+    fn nothing_is_plotted_until_something_is_put_on_a_plot() {
+        let mut state = state();
+        state.tab = 1;
+        let screen = rendered(&state, 90, 20);
+        assert!(screen.contains("Nothing is plotted"), "{}", screen);
+    }
+
+    #[test]
+    fn a_plot_draws_its_channels_and_names_them_beside_it() {
+        let mut state = state();
+        state.apply(Update::Data {
+            device: "Rig".to_string(),
+            channel: "Flow".to_string(),
+            points: readings(&[1.0, 4.0, 2.0, 8.0, 5.0]),
+        });
+        plot(&mut state, 0, 1);
+        state.tab = 1;
+        let screen = rendered(&state, 90, 20);
+        println!("{}", screen);
+        assert!(screen.contains("Plot 1"), "{}", screen);
+        // The legend is the reading as well, so the Devices tab does not have
+        // to be switched back to for it.
+        assert!(screen.contains("Flow"), "{}", screen);
+        assert!(screen.contains("5.000 L/min"), "{}", screen);
+        // Four seconds of readings, and a y axis spanning what arrived.
+        assert!(screen.contains("4.0s"), "{}", screen);
+    }
+
+    #[test]
+    fn channels_on_different_plots_get_a_plot_each() {
+        let mut state = state();
+        plot(&mut state, 0, 1);
+        plot(&mut state, 1, 3);
+        state.tab = 1;
+        let screen = rendered(&state, 90, 20);
+        assert!(screen.contains("Plot 1"), "{}", screen);
+        assert!(screen.contains("Plot 3"), "{}", screen);
+    }
+
+    #[test]
+    fn a_channel_comes_off_a_plot_again() {
+        let mut state = state();
+        plot(&mut state, 0, 1);
+        assert_eq!(state.devices[0].channels[0].plot, Some(1));
+        state.assign(None);
+        assert_eq!(state.devices[0].channels[0].plot, None);
+    }
+
+    #[test]
+    fn a_plot_of_a_reading_that_never_moves_still_has_an_axis() {
+        // Otherwise the axis is zero high and there is nowhere to draw.
+        let mut state = state();
+        state.apply(Update::Data {
+            device: "Rig".to_string(),
+            channel: "Flow".to_string(),
+            points: readings(&[7.0, 7.0, 7.0]),
+        });
+        plot(&mut state, 0, 1);
+        state.tab = 1;
+        let screen = rendered(&state, 90, 20);
+        assert!(screen.contains("6.00"), "{}", screen);
+        assert!(screen.contains("8.00"), "{}", screen);
+    }
+
+    #[test]
+    fn a_plotted_channel_with_no_readings_yet_says_so() {
+        let mut state = state();
+        plot(&mut state, 2, 1);
+        state.tab = 1;
+        let screen = rendered(&state, 90, 20);
+        assert!(screen.contains("waiting for readings"), "{}", screen);
+    }
+
+    #[test]
+    fn history_is_bounded() {
+        let mut state = state();
+        let values: Vec<f64> = (0..HISTORY_KEPT + 50).map(|n| n as f64).collect();
+        state.apply(Update::Data {
+            device: "Rig".to_string(),
+            channel: "Flow".to_string(),
+            points: readings(&values),
+        });
+        let history = &state.devices[0].channels[0].history;
+        assert_eq!(history.len(), HISTORY_KEPT);
+        // The oldest go, not the newest.
+        assert_eq!(history.back().unwrap().value, (HISTORY_KEPT + 49) as f64);
+    }
+
+    #[test]
+    fn a_plot_numbers_its_channels_the_same_way_the_devices_tab_colours_them() {
+        // The box beside a channel is coloured as the line it produces, which
+        // only holds if both count position the same way.
+        let mut state = state();
+        plot(&mut state, 0, 1);
+        plot(&mut state, 2, 1);
+        let positions = series_positions(&state);
+        assert_eq!(positions[0], Some(0));
+        assert_eq!(positions[1], None);
+        assert_eq!(positions[2], Some(1));
     }
 
     #[test]
