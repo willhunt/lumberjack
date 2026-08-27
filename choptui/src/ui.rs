@@ -88,10 +88,12 @@ const SERIES: [Color; 6] = [
     Color::White,
 ];
 
-const ACCENT: Color = Color::LightRed;
+/// Borders, titles and anything else the interface is made of.
+const ACCENT: Color = Color::LightMagenta;
 
-/// Recording, and a device that is not there. Both mean look here, which is why
-/// they share a colour rather than each picking a red of its own.
+/// Recording, and a device that is not there. Both mean look here, and being a
+/// different colour from the interface around them is the whole point: a
+/// failure drawn in the same red as the box it sits on was easy to miss.
 const ALERT: Color = Color::LightRed;
 const DIM: Color = Color::DarkGray;
 
@@ -425,7 +427,7 @@ fn recording_state(state: &State) -> Line<'static> {
         ]),
         None => Line::from(vec![
             Span::styled("not recording", Style::new().fg(DIM)),
-            Span::styled("  record (r)", Style::new().fg(ACCENT)),
+            Span::styled("  record (r)", Style::new().fg(ALERT)),
         ]),
     }
 }
