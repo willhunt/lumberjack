@@ -89,6 +89,10 @@ const SERIES: [Color; 6] = [
 ];
 
 const ACCENT: Color = Color::LightRed;
+
+/// Recording, and a device that is not there. Both mean look here, which is why
+/// they share a colour rather than each picking a red of its own.
+const ALERT: Color = Color::LightRed;
 const DIM: Color = Color::DarkGray;
 
 pub enum Status {
@@ -414,7 +418,7 @@ fn recording_state(state: &State) -> Line<'static> {
         Some(since) => Line::from(vec![
             Span::styled(
                 "REC ",
-                Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::new().fg(ALERT).add_modifier(Modifier::BOLD),
             ),
             Span::styled(clock(since.elapsed()), Style::new().fg(Color::White)),
             Span::styled("  stop (r)", Style::new().fg(DIM)),
@@ -635,7 +639,7 @@ fn status(status: &Status) -> (String, Color) {
     match status {
         Status::Connected => ("Connected".to_string(), Color::Green),
         Status::Disconnected(None) => ("Waiting".to_string(), DIM),
-        Status::Disconnected(Some(reason)) => (shortened(reason), Color::Red),
+        Status::Disconnected(Some(reason)) => (shortened(reason), ALERT),
     }
 }
 
