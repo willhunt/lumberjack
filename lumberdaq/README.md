@@ -62,6 +62,52 @@ It exits non-zero when anything failed, so it is worth something in a script.
 
 What it cannot tell you is whether the hardware answers. That needs the rig.
 
+### Getting the results out
+
+```cmd
+cargo run -- export test_projects/scaled
+```
+
+Writes one CSV per recorded run into `PROJECT/export`, named for when the run
+started:
+
+```
+    wrote    2026-08-27_09-01-49Z.csv  (12 rows)
+    skipped  2026-08-27_09-01-50Z.csv  (already exported)
+```
+
+A run whose file is already there is left alone, so exporting again costs
+nothing and does nothing. The file is the only record of what has been
+exported, so deleting one is how to have it written again.
+
+```
+timestamp_utc,seconds,Rig/Flow (L/min),Rig/Pressure (bar)
+2026-08-26 20:54:12.000000,0.000000,14.5,7.25
+2026-08-26 20:54:12.050000,0.050000,14.5,7.31
+```
+
+`seconds` counts from the first reading of that run, which is what a test is
+usually plotted against. Values are written to whatever precision they are held
+at: a reading is what the instrument said, and rounding it on the way out would
+be this deciding how much of it matters.
+
+Channels on the same device share their timestamps exactly, so their columns
+line up. Channels on **different** devices never do — separate threads, landing
+about half a millisecond apart — so a row belonging to one device leaves the
+other's columns blank. A blank means no reading was taken then; the last one is
+never carried forward, since that would invent data indistinguishable from the
+real thing.
+
+The database is opened read only. Exporting must not be able to damage the
+results it is reading.
+
+Two runs starting in the same second, which stopping and restarting a recording
+quickly will do, would want the same file. The second gets the run number added
+rather than being taken for the first and never written.
+
+**Export a run that is still recording and you get it as far as it had got, and
+it is skipped from then on.** Stop the recording first, or delete the file.
+
 ## Creating a project
 
 `build_config` defines a rig in Rust and writes it out as a config. That is a

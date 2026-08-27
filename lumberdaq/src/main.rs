@@ -2,6 +2,7 @@
 //!
 //!     lumberdaq [project directory]
 //!     lumberdaq check [project directory]
+//!     lumberdaq export [project directory]
 //!
 //! The directory holds config.json describing the devices, and is where the
 //! results are written. Defaults to the current directory, so running inside a
@@ -19,6 +20,7 @@ Record a data acquisition project.
 USAGE:
     lumberdaq [PROJECT]           Record until interrupted with Ctrl-C.
     lumberdaq check [PROJECT]     Check the setup and stop.
+    lumberdaq export [PROJECT]    Write recorded runs out as CSV.
 
 ARGS:
     PROJECT    Directory holding config.json. Defaults to the current directory.
@@ -26,6 +28,10 @@ ARGS:
 `check` builds everything a recording would build and reports what is wrong,
 without connecting to any hardware or writing a results file. Useful away from
 the rig, and before a run that matters.
+
+`export` writes one CSV per recorded run into PROJECT/export, named for when
+the run started. A run whose file is already there is left alone, so exporting
+again costs nothing and does nothing.
 ";
 
 fn main() {
@@ -66,6 +72,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         Some("check") => check(&directory_or_here(arguments.next())),
+        Some("export") => export(&directory_or_here(arguments.next())),
         argument => record(&directory_or_here(argument.map(String::from))),
     }
 }
@@ -73,6 +80,40 @@ fn run() -> Result<()> {
 /// Running inside a project should need no argument at all.
 fn directory_or_here(argument: Option<String>) -> String {
     argument.unwrap_or_else(|| ".".to_string())
+}
+
+/// Write recorded runs out as CSV, skipping any already written.
+fn export(directory: &str) -> Result<()> {
+    let project = Project::new(directory);
+    let database = project.database_path();
+    if !database.exists() {
+        return Err(format!(
+            "no {} in {}, so nothing has been recorded there yet",
+            database.file_name().unwrap_or_default().to_string_lossy(),
+            directory
+        )
+        .into());
+    }
+
+    let report = lumberdaq::export::export(&database, &project.export_path())?;
+    println!("Exporting {}\n", directory);
+    for (path, rows) in report.written.iter() {
+        println!("    wrote    {}  ({} rows)", name_of(path), rows);
+    }
+    for path in report.skipped.iter() {
+        println!("    skipped  {}  (already exported)", name_of(path));
+    }
+
+    match (report.written.len(), report.skipped.len()) {
+        (0, 0) => println!("    nothing recorded yet"),
+        (0, _) => println!("\nEverything was exported already. Delete a file to have it written again."),
+        (written, _) => println!("\n{} run(s) written to {}.", written, project.export_path().display()),
+    }
+    Ok(())
+}
+
+fn name_of(path: &std::path::Path) -> String {
+    path.file_name().unwrap_or_default().to_string_lossy().to_string()
 }
 
 /// Report on a setup without connecting to it or writing anything.

@@ -61,6 +61,15 @@ impl Project {
         self.directory.join("results.db")
     }
 
+    /// Where exported CSV files go.
+    ///
+    /// A directory of its own, since there is one file per run and they
+    /// accumulate. Keeping them out of the project directory means what a
+    /// project *is* stays legible next to what has been got out of it.
+    pub fn export_path(&self) -> PathBuf {
+        self.directory.join("export")
+    }
+
     pub fn read_config(&self) -> Result<DaqConfig> {
         read_configuration_file(&self.config_path())
     }

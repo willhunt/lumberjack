@@ -8,6 +8,7 @@ pub mod daq;
 pub mod calculated;
 pub mod check;
 pub mod equation;
+pub mod export;
 pub mod config;
 pub mod project;
 pub mod session;
