@@ -1,0 +1,17 @@
+[package]
+name = "nidaqmx"
+version = "0.1.0"
+edition = "2021"
+description = "Safe wrappers over the National Instruments DAQmx driver"
+
+# libloading only. The driver is found at runtime rather than linked, so this
+# builds on a machine with no NI software installed and fails at load() with
+# something readable instead of failing to link.
+#
+# Deliberately no bindgen here: the bindings in src/raw are generated once and
+# committed. This is also why the published daqmx-rs is not used — its
+# ni-daqmx-sys emits `cargo:rustc-link-lib=nidaqmx`, so building against it
+# wants NIDAQmx.lib, and therefore the NI C development component, on every
+# machine that compiles this whether or not it will ever see NI hardware.
+[dependencies]
+libloading = "0.8"

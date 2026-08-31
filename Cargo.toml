@@ -11,6 +11,7 @@ resolver = "2"
 members = [
     "lumberdaq",  # the library and its CLI
     "picolog",    # safe wrappers over the Pico driver, used by lumberdaq
+    "nidaqmx",    # the same for National Instruments, for legacy USB-6001 hardware
     "choptui",    # terminal monitor, a separate crate on purpose
 ]
 # Cargo insists every nested crate is either a member or excluded here.

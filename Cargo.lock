@@ -936,6 +936,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nidaqmx"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+]
+
+[[package]]
 name = "nix"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
