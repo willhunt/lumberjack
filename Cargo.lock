@@ -842,6 +842,7 @@ dependencies = [
  "ctrlc",
  "evalexpr",
  "ndarray",
+ "nidaqmx",
  "picolog",
  "rand",
  "regex",
