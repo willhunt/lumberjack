@@ -1,0 +1,21 @@
+{
+  "info": { "name": "NI USB-6001", "author": "Will Hunt" },
+  "storage": "sqlite",
+  "devices": [
+    {
+      "info": { "name": "Legacy rig", "description": "USB-6001 through NI-DAQmx" },
+      "read_interval_ms": 100,
+      "hardware": {
+        "type": "NiDaqmx",
+        "description": "USB-6001",
+        "device": "Dev1",
+        "channels": [
+          { "name": "Single ended", "unit": "V", "description": "ai0 against ground",
+            "channel": 0, "single_ended": true },
+          { "name": "Differential", "unit": "V", "description": "ai1 measured against ai5",
+            "channel": 1, "single_ended": false }
+        ]
+      }
+    }
+  ]
+}

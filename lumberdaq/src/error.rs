@@ -91,6 +91,35 @@ pub enum Error {
     #[error("channel {channel} is configured, but this unit is an ADC-{variant} which has only {available}")]
     ChannelNotOnThisUnit { channel: u16, variant: String, available: u16 },
 
+    // ---- National Instruments ----------------------------------------------
+
+    #[error("an NI device needs the name NI MAX gave it, such as 'Dev1'. DAQmx addresses channels by it, as in Dev1/ai0")]
+    NiDeviceNotNamed,
+
+    #[error("no NI device called '{device}'. The driver knows of: {available}")]
+    NiDeviceNotFound { device: String, available: String },
+
+    #[error("{channel} is configured twice on {device}")]
+    NiDuplicateChannel { device: String, channel: u32 },
+
+    #[error("the range for {channel} runs from {low} to {high}, which is backwards")]
+    NiRangeNotAscending { channel: String, low: f64, high: f64 },
+
+    #[error("{device}/ai{primary} measures differentially against ai{secondary}, so ai{secondary} cannot also be read on its own. NI pairs an input with the one four above it")]
+    NiDifferentialPartnerInUse { device: String, primary: u32, secondary: u32 },
+
+    #[error("{channel} cannot be differential: it would measure against ai{partner}, and this device has only {inputs} inputs. NI pairs an input with the one four above it, so only the lower half can start a pair")]
+    NiDifferentialHasNoPartner { channel: String, partner: u32, inputs: usize },
+
+    #[error("{channel} is not on {device}, which has {inputs} analog inputs")]
+    NiChannelNotOnDevice { channel: String, device: String, inputs: usize },
+
+    #[error("the NI driver could not do what was asked")]
+    NiDaqmx {
+        #[source]
+        source: nidaqmx::Error,
+    },
+
     // ---- Calculated channels -----------------------------------------------
     #[error("the equation for '{channel}' could not be read: {reason}. Equation: {equation}")]
     InvalidEquation { channel: String, equation: String, reason: String },
@@ -250,5 +279,13 @@ mod tests {
         let io = std::io::Error::new(std::io::ErrorKind::NotFound, "no such port");
         let error: Error = io.into();
         assert_eq!(error.to_string(), "no such port");
+    }
+}
+
+/// So a driver failure can be carried with `?` rather than mapped at every
+/// call. The driver's own message is kept as the source.
+impl From<nidaqmx::Error> for Error {
+    fn from(source: nidaqmx::Error) -> Error {
+        Error::NiDaqmx { source: source }
     }
 }

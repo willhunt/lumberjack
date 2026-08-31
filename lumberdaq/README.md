@@ -366,6 +366,46 @@ which for a multiplication or an offset it always can.
 `test_projects/scaled` shows both forms with an unscaled channel beside them for
 comparison. It needs no hardware.
 
+## National Instruments
+
+Kept for USB-6001 hardware we already own; new work goes to Pico.
+
+```json
+{
+  "type": "NiDaqmx",
+  "description": "USB-6001",
+  "device": "Dev1",
+  "channels": [
+    { "name": "Inlet", "unit": "V", "description": "ai0 against ground",
+      "channel": 0, "single_ended": true },
+    { "name": "Bridge", "unit": "V", "description": "ai1 measured against ai5",
+      "channel": 1, "single_ended": false, "range": [-10.0, 10.0] }
+  ]
+}
+```
+
+`device` is the name NI MAX gave the hardware. DAQmx addresses channels by it,
+as in `Dev1/ai0`, and it is assigned outside this program, so it has to be
+written down rather than found. `cargo run -p nidaqmx --example probe_devices`
+lists what the driver knows about.
+
+Polled only. Every read converts, so the device's `read_interval_ms` is the
+sample rate. All the channels of one device are converted in a single scan and
+share a timestamp exactly.
+
+Nothing here needs NI software installed unless a project actually contains one
+of these devices — see [drivers](../README.md#drivers).
+
+### Differential inputs on an NI device
+
+NI pairs an input with the one **four** above it, so on an eight input device
+only ai0 to ai3 can start a pair, each measured against ai4 to ai7. This is not
+the same as a Pico, which pairs with the input immediately above.
+
+The partner is consumed by the pair, so reading it separately is refused before
+a run rather than at connect. Whether the device has that many inputs at all
+needs the driver, and is checked when it connects.
+
 ## Calculated channels
 
 A scale reads one channel. When a value needs several — a differential pressure

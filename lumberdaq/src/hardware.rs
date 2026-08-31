@@ -1,5 +1,6 @@
 // Add module 'hardware' in hardware folder
 pub mod mock_hardware;
+pub mod ni_daqmx;
 pub mod pico_hrdl;
 pub mod serial_stream;
 
@@ -7,6 +8,7 @@ use crate::channel::ChannelInfo;
 use crate::datapoint::DataPoint;
 use crate::{ Error, Result };
 use mock_hardware::{ MockHardware, MockHardwareConfig };
+use ni_daqmx::{ NiDaqmx, NiDaqmxConfig };
 use pico_hrdl::{ PicoHrdl, PicoHrdlConfig };
 use serial_stream:: { SerialStream, SerialStreamConfig };
 use crate::device::DeviceInterface;
@@ -26,6 +28,7 @@ pub trait HardwareDataAquisition {
 pub enum HardwareConfig {
     MockHardware(MockHardwareConfig),
     PicoHrdl(PicoHrdlConfig),
+    NiDaqmx(NiDaqmxConfig),
     SerialStream(SerialStreamConfig),
     None,
 }
@@ -65,6 +68,9 @@ impl HardwareConfig {
             },
             // The device streams at whatever rate it was built for, and nothing
             // in the configuration says what that is.
+            // Polled only so far: every read converts, so the device read
+            // interval is the period.
+            HardwareConfig::NiDaqmx(_) => SampleRate::PerRead,
             HardwareConfig::SerialStream(_) => SampleRate::Unknown,
             HardwareConfig::None => SampleRate::Unknown,
         }
@@ -83,6 +89,9 @@ impl HardwareConfig {
             HardwareConfig::PicoHrdl(config) => {
                 config.channels.iter().map(|channel| channel.info.clone()).collect()
             }
+            HardwareConfig::NiDaqmx(config) => {
+                config.channels.iter().map(|channel| channel.info.clone()).collect()
+            }
             HardwareConfig::SerialStream(config) => {
                 config.channels.iter().map(|channel| channel.info.clone()).collect()
             }
@@ -96,6 +105,7 @@ impl HardwareConfig {
 pub enum Hardware {
     MockHardware(MockHardware),
     PicoHrdl(PicoHrdl),
+    NiDaqmx(NiDaqmx),
     SerialStream(SerialStream),
     None,
 }
@@ -106,6 +116,7 @@ impl Hardware {
         Ok(match config {
             HardwareConfig::MockHardware(config) => Hardware::MockHardware(MockHardware::from_config(config)?),
             HardwareConfig::PicoHrdl(config) => Hardware::PicoHrdl(PicoHrdl::from_config(config)?),
+            HardwareConfig::NiDaqmx(config) => Hardware::NiDaqmx(NiDaqmx::from_config(config)?),
             HardwareConfig::SerialStream(config) => Hardware::SerialStream(SerialStream::from_config(config)?),
             HardwareConfig::None => Hardware::None,
         })
@@ -117,6 +128,7 @@ impl Hardware {
         match self {
             Hardware::MockHardware(device) => HardwareConfig::MockHardware(device.config()),
             Hardware::PicoHrdl(device) => HardwareConfig::PicoHrdl(device.config()),
+            Hardware::NiDaqmx(device) => HardwareConfig::NiDaqmx(device.config()),
             Hardware::SerialStream(device) => HardwareConfig::SerialStream(device.config()),
             Hardware::None => HardwareConfig::None,
         }
@@ -127,6 +139,7 @@ impl HardwareDataAquisition for Hardware {
         match self {
             Hardware::MockHardware(device) => device.read(),
             Hardware::PicoHrdl(device) => device.read(),
+            Hardware::NiDaqmx(device) => device.read(),
             Hardware::SerialStream(device) => device.read(),
             Hardware::None => Err(Error::NoHardware)
         }
@@ -137,6 +150,7 @@ impl DeviceInterface for Hardware {
         match self {
             Hardware::MockHardware(device) => device.connect()?,
             Hardware::PicoHrdl(device) => device.connect()?,
+            Hardware::NiDaqmx(device) => device.connect()?,
             Hardware::SerialStream(device) => device.connect()?,
             Hardware::None => return Err(Error::NoHardware)
         }
