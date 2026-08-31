@@ -17,12 +17,23 @@ Repo layout:
 
 ### Hardware direction
 
-Moving **away from National Instruments** and towards Pico Technology, and likely other
-open-ish DAQ hardware such as LabJack. The NI USB-6001 backend and the `daqmx-rs` bindings
-crate were removed in `593796e` — don't reintroduce them or suggest NI-DAQmx as an option.
+New work goes towards Pico Technology and likely other open-ish DAQ hardware such as
+LabJack, not National Instruments. But we still own USB-6001 hardware and still need to
+read it, so NI support is wanted — as a legacy option, not a direction.
 
-Current backends: `MockHardware` (always keep working, it's how we run with no hardware)
-and `SerialStream` (in progress). Pico is the next real one.
+The old NI backend and the `daqmx-rs` crate were removed in `593796e`, and what was wrong
+with them should not come back: `daqmx-rs` ran bindgen from `build.rs`, which put libclang
+and the NI SDK on the critical path of every build on every machine. NI support is
+acceptable on the same terms as `picolog` — bindings generated once and committed, the
+driver found at runtime with `libloading`, so the workspace builds and runs with no NI
+software installed and only someone actually reading a 6001 needs the DAQmx runtime.
+
+Current backends: `MockHardware` (always keep working, it's how we run with no hardware),
+`SerialStream`, and `PicoHrdl` via the `picolog` crate. NI is next.
+
+Vendors differ in ways that must stay inside their own crate. A Pico differential input
+pairs channel N with N+1, so only odd channels start a pair; NI pairs N with N+4. The
+config surface can look the same, the arithmetic cannot be shared.
 
 ### Roadmap (rough, not committed)
 
