@@ -105,10 +105,12 @@ usually plotted against. Values are written to whatever precision they are held
 at: a reading is what the instrument said, and rounding it on the way out would
 be this deciding how much of it matters.
 
-Channels on the same device share their timestamps exactly, so their columns
-line up. Channels on **different** devices never do — separate threads, landing
-about half a millisecond apart — so a row belonging to one device leaves the
-other's columns blank. A blank means no reading was taken then; the last one is
+Channels converted together share a timestamp exactly, so their columns line up:
+a mock device, a serial frame and an NI task each produce one scan holding every
+channel. Channels on **different** devices never do — separate threads, landing
+about half a millisecond apart — and a **polled Pico** does not either, because
+it really does convert one channel at a time and stamps each with when it was
+measured. Either way a row leaves the other columns blank. A blank means no reading was taken then; the last one is
 never carried forward, since that would invent data indistinguishable from the
 real thing.
 

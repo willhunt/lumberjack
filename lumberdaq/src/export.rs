@@ -24,12 +24,18 @@
 //! usually plotted against. The timestamp is there for anything that needs to
 //! know when, and is UTC, as stored.
 //!
-//! One row per instant a reading was taken. Channels on the same device share
-//! their timestamps exactly, so their columns line up with no gaps. Channels on
-//! *different* devices never do — they are read by different threads and land
-//! about half a millisecond apart — so a row belonging to one device leaves the
-//! other's columns empty. That is the data telling the truth about itself
-//! rather than a fault in the file.
+//! One row per instant a reading was taken.
+//!
+//! Channels converted together share a timestamp exactly, so their columns line
+//! up with no gaps. That covers most of them: a mock device, a serial frame and
+//! an NI task all produce one scan holding every channel.
+//!
+//! Two things break that, and both are the data being honest rather than the
+//! file being wrong. Channels on **different devices** are read by different
+//! threads and land about half a millisecond apart. And a **polled Pico** really
+//! does convert one channel at a time, taking up to 660 ms over each, so it
+//! stamps every channel with the moment that channel was measured. Both leave
+//! the other columns of a row empty.
 
 use crate::Result;
 use chrono::{ DateTime, TimeZone, Utc };
