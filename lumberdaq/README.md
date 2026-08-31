@@ -2,8 +2,22 @@
 Rust library for data aquisition
 
 ## Install
-### Windows
-...
+
+```cmd
+cargo build
+```
+
+Nothing else, whatever hardware you own. Vendor drivers are looked up at run
+time rather than linked, so this builds on a machine with none of them
+installed and the mock device runs with nothing attached at all.
+
+A driver is needed only to read the hardware that needs it: PicoSDK for an
+ADC-20 or ADC-24, the NI-DAQmx runtime for a USB-6001. Which components, and
+what to leave out of the NI installer, is in the [repository README](../README.md#drivers).
+
+A device that cannot find its driver says so when it connects, naming what it
+looked for, and the rest of the setup carries on recording without it.
+
 
 ## Running
 
