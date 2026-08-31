@@ -71,6 +71,44 @@ Record which DAQmx release it came from, above. NI do not follow semver, so
 knowing which header the bindings describe is the only way to tell whether a
 difference is a bug or a version.
 
+## Differential inputs
+
+NI pairs a channel with the one **four** above it, so on an eight input device
+only ai0 to ai3 can start a pair, each measured against ai4 to ai7. That is not
+the same as a Pico, which pairs with the channel immediately above, so the
+arithmetic lives in each driver crate even though the config surface looks
+alike.
+
+Asked of the driver rather than taken on trust:
+
+```cmd
+cargo run -p nidaqmx --example probe_terminals -- Dev1
+```
+
+```
+  channel      single ended                   differential
+  Dev1/ai0     accepted                       accepted
+  Dev1/ai3     accepted                       accepted
+  Dev1/ai4     accepted                       Requested value is not a ...
+  Dev1/ai7     accepted                       Requested value is not a ...
+```
+
+A configuration is tested by starting the task, not merely by adding the
+channel: DAQmx checks some things only when a task is committed.
+
+What a refusal says in full is the reason this driver is pleasant to work with
+— it names the property, what was asked for, and what it would have taken:
+
+```
+Property: DAQmx_AI_TermCfg
+Requested Value: DAQmx_Val_Diff
+Possible Values: DAQmx_Val_RSE
+Channel Name: Dev1/ai4
+```
+
+`can_be_differential` and `differential_partner` hold the same rule so a setup
+can be refused from a desk, with no hardware attached.
+
 ## Checking a device
 
 ```cmd
