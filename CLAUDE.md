@@ -21,9 +21,14 @@ New work goes towards Pico Technology and likely other open-ish DAQ hardware suc
 LabJack, not National Instruments. But we still own USB-6001 hardware and still need to
 read it, so NI support is wanted — as a legacy option, not a direction.
 
-The old NI backend and the `daqmx-rs` crate were removed in `593796e`, and what was wrong
-with them should not come back: `daqmx-rs` ran bindgen from `build.rs`, which put libclang
-and the NI SDK on the critical path of every build on every machine. NI support is
+The old NI backend and the `daqmx-rs` crate were removed in `593796e` because building the
+workspace needed NI software installed. `daqmx-rs` ran bindgen from `build.rs` at the time,
+putting libclang and the NI SDK on the critical path of every build on every machine. It no
+longer does — its bindings are generated once and committed now — but `ni-daqmx-sys` still
+emits `cargo:rustc-link-lib=nidaqmx`, so building against it needs `NIDAQmx.lib`, and that
+means the NI C development component on every machine that compiles this. Same cost, moved
+from bindgen to the linker. Read it for how DAQmx is shaped, by all means; it is MIT and
+well organised. Do not depend on it. NI support is
 acceptable on the same terms as `picolog` — bindings generated once and committed, the
 driver found at runtime with `libloading`, so the workspace builds and runs with no NI
 software installed and only someone actually reading a 6001 needs the DAQmx runtime.
