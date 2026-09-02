@@ -26,9 +26,22 @@ fn default_single_ended() -> bool {
     true
 }
 
+impl Default for NiDaqmxConfig {
+    /// A device named as NI MAX names the first one it finds.
+    ///
+    /// `Dev1` rather than empty: unlike a serial port, this is what a single
+    /// USB-6001 on a fresh machine is actually called, so it is a good guess
+    /// rather than a shot in the dark.
+    fn default() -> NiDaqmxConfig {
+        NiDaqmxConfig {
+            device: "Dev1".to_string(),
+            channels: vec![],
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct NiDaqmxConfig {
-    pub description: String,
     /// The name NI MAX gave the hardware, such as `Dev1`.
     ///
     /// DAQmx addresses channels by it, as in `Dev1/ai0`, and it is assigned
@@ -63,8 +76,15 @@ pub struct NiDaqmx {
 }
 
 impl NiDaqmx {
-    pub fn from_config(config: NiDaqmxConfig) -> Result<NiDaqmx> {
-        check_channels(&config)?;
+    pub fn from_config(mut config: NiDaqmxConfig) -> Result<NiDaqmx> {
+        check_channels(&config, None)?;
+        // An analog input measures volts and nothing else, so a channel need
+        // not say so. One that claims otherwise without a scale to make it true
+        // is refused here rather than mislabelling a run.
+        for channel in config.channels.iter_mut() {
+            let named = channel.info.name.clone();
+            channel.info.settle_voltage_unit(&named)?;
+        }
         Ok(NiDaqmx { config: config, task: None })
     }
 
@@ -78,12 +98,15 @@ impl NiDaqmx {
     }
 }
 
-/// Everything about a setup that can be decided without the hardware.
+/// Everything about a setup that can be decided from what is known.
 ///
-/// Whether the device exists and has that many inputs needs the driver, and is
-/// checked at connect. Everything here is true or false from the config alone,
-/// which is what lets `lumberdaq check` catch it from a desk.
-fn check_channels(config: &NiDaqmxConfig) -> Result<()> {
+/// Naming, duplicates and ranges are true or false from the config alone,
+/// which is what lets `lumberdaq check` catch them from a desk. Anything about
+/// differential pairs needs to know how many inputs the device has, since that
+/// is what decides which input is the other half, so `inputs` is `None` at a
+/// desk and the driver's answer at connect. Whether the device exists at all
+/// still needs the driver.
+pub(crate) fn check_channels(config: &NiDaqmxConfig, inputs: Option<usize>) -> Result<()> {
     if config.device.trim().is_empty() {
         return Err(Error::NiDeviceNotNamed);
     }
@@ -107,12 +130,44 @@ fn check_channels(config: &NiDaqmxConfig) -> Result<()> {
                 high: channel.range.1,
             });
         }
+    }
+
+    // Which input a differential pair takes as its other half depends on how
+    // many the device has: ai0 pairs with ai4 on an eight input device and
+    // with ai8 on a sixteen. So the rest cannot be answered from the config
+    // alone, and is skipped rather than guessed at when nobody has said. The
+    // driver says at connect, which is where these are asked in earnest.
+    let Some(inputs) = inputs else {
+        return Ok(());
+    };
+
+    for channel in config.channels.iter() {
+        let highest = match channel.single_ended {
+            true => channel.channel,
+            false => differential_partner(channel.channel, inputs),
+        };
+        if highest as usize >= inputs {
+            return Err(Error::NiChannelNotOnDevice {
+                channel: self_name(config, channel),
+                device: config.device.clone(),
+                inputs,
+            });
+        }
         if channel.single_ended {
             continue;
         }
+        // Checked here rather than left to the driver so the message names the
+        // pair, where DAQmx would only say the value was unsupported.
+        if !can_be_differential(channel.channel, inputs) {
+            return Err(Error::NiDifferentialHasNoPartner {
+                channel: self_name(config, channel),
+                partner: differential_partner(channel.channel, inputs),
+                inputs,
+            });
+        }
         // The other half of the pair is consumed by it, so reading it
         // separately would be reading one input as two different things.
-        let partner = differential_partner(channel.channel);
+        let partner = differential_partner(channel.channel, inputs);
         if configured.contains(&partner) {
             return Err(Error::NiDifferentialPartnerInUse {
                 device: config.device.clone(),
@@ -122,6 +177,43 @@ fn check_channels(config: &NiDaqmxConfig) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The NI devices this machine can see, as NI MAX names them.
+///
+/// `DAQmxGetSysDevNames`, through the driver loaded at run time. An empty list
+/// is the ordinary answer on a machine with no NI software installed, which is
+/// most of them: the driver failing to load is not an error here, it just
+/// means there is nothing to offer and the name has to be typed.
+///
+/// This talks to the driver, so it is a moment's work rather than free. Call
+/// it when a list is about to be shown, not on every redraw.
+pub fn available_devices() -> Vec<String> {
+    Daqmx::load().and_then(|daqmx| daqmx.devices()).unwrap_or_default()
+}
+
+/// What model a device actually is, as the driver names it: `USB-6001`.
+///
+/// `DAQmxGetDevProductType`. Worth asking rather than assuming, since a config
+/// naming `Dev1` says nothing about what is plugged in as `Dev1` today, and a
+/// 6001 and a 6002 are not the same instrument. `None` where the driver cannot
+/// be loaded or the device is not attached.
+pub fn product_type(device: &str) -> Option<String> {
+    Daqmx::load().and_then(|daqmx| daqmx.product_type(device)).ok().filter(|name| !name.is_empty())
+}
+
+/// How many analog inputs a device has, where the driver can say.
+///
+/// `None` on a machine with no NI software, or for a device that is not
+/// attached. Only the hardware knows this: a config names channels but never
+/// how many there are to name, which is why a channel beyond the end is found
+/// at connect rather than from the file.
+pub fn input_count(device: &str) -> Option<usize> {
+    let inputs = Daqmx::load().and_then(|daqmx| daqmx.analog_inputs(device)).ok()?;
+    match inputs.is_empty() {
+        true => None,
+        false => Some(inputs.len()),
+    }
 }
 
 fn self_name(config: &NiDaqmxConfig, channel: &NiDaqmxChannel) -> String {
@@ -142,28 +234,9 @@ impl DeviceInterface for NiDaqmx {
             });
         }
 
-        for channel in self.config.channels.iter() {
-            let highest = match channel.single_ended {
-                true => channel.channel,
-                false => differential_partner(channel.channel),
-            };
-            if highest as usize >= inputs.len() {
-                return Err(Error::NiChannelNotOnDevice {
-                    channel: self.physical(channel),
-                    device: self.config.device.clone(),
-                    inputs: inputs.len(),
-                });
-            }
-            // Checked here rather than left to the driver so the message names
-            // the pair, where DAQmx would only say the value was unsupported.
-            if !channel.single_ended && !can_be_differential(channel.channel, inputs.len()) {
-                return Err(Error::NiDifferentialHasNoPartner {
-                    channel: self.physical(channel),
-                    partner: differential_partner(channel.channel),
-                    inputs: inputs.len(),
-                });
-            }
-        }
+        // The same checks as at a desk, now that the driver has said how many
+        // inputs there are: the ones that need that count were skipped then.
+        check_channels(&self.config, Some(inputs.len()))?;
 
         // One task holding every channel, which is what makes them share a
         // reading: DAQmx converts them together and hands back one value each.
@@ -223,7 +296,6 @@ mod tests {
 
     fn config(channels: Vec<NiDaqmxChannel>) -> NiDaqmxConfig {
         NiDaqmxConfig {
-            description: "-".to_string(),
             device: "Dev1".to_string(),
             channels: channels,
         }
@@ -231,7 +303,7 @@ mod tests {
 
     #[test]
     fn a_plain_setup_is_accepted() {
-        assert!(check_channels(&config(vec![channel(0, true), channel(1, true)])).is_ok());
+        assert!(check_channels(&config(vec![channel(0, true), channel(1, true)]), Some(8)).is_ok());
     }
 
     #[test]
@@ -239,7 +311,7 @@ mod tests {
         // ai0 differential measures between ai0 and ai4, so reading ai4 as well
         // would be reading one input as two different things.
         let error =
-            check_channels(&config(vec![channel(0, false), channel(4, true)])).unwrap_err();
+            check_channels(&config(vec![channel(0, false), channel(4, true)]), Some(8)).unwrap_err();
         assert!(
             matches!(error, Error::NiDifferentialPartnerInUse { primary: 0, secondary: 4, .. }),
             "{}",
@@ -248,13 +320,13 @@ mod tests {
         // ai1 differential takes ai1 and ai5, so ai4 is a different input and
         // reading it as well is fine. It is the partner that is spoken for,
         // not the whole upper half.
-        assert!(check_channels(&config(vec![channel(1, false), channel(4, true)])).is_ok());
-        assert!(check_channels(&config(vec![channel(1, false), channel(5, true)])).is_err());
+        assert!(check_channels(&config(vec![channel(1, false), channel(4, true)]), Some(8)).is_ok());
+        assert!(check_channels(&config(vec![channel(1, false), channel(5, true)]), Some(8)).is_err());
     }
 
     #[test]
     fn the_same_input_cannot_be_configured_twice() {
-        let error = check_channels(&config(vec![channel(2, true), channel(2, true)])).unwrap_err();
+        let error = check_channels(&config(vec![channel(2, true), channel(2, true)]), Some(8)).unwrap_err();
         assert!(matches!(error, Error::NiDuplicateChannel { channel: 2, .. }), "{}", error);
     }
 
@@ -262,7 +334,7 @@ mod tests {
     fn a_range_has_to_go_upwards() {
         let mut backwards = channel(0, true);
         backwards.range = (10.0, -10.0);
-        let error = check_channels(&config(vec![backwards])).unwrap_err();
+        let error = check_channels(&config(vec![backwards]), Some(8)).unwrap_err();
         assert!(matches!(error, Error::NiRangeNotAscending { .. }), "{}", error);
     }
 
@@ -273,7 +345,7 @@ mod tests {
         let mut nameless = config(vec![channel(0, true)]);
         nameless.device = "  ".to_string();
         assert!(matches!(
-            check_channels(&nameless).unwrap_err(),
+            check_channels(&nameless, Some(8)).unwrap_err(),
             Error::NiDeviceNotNamed
         ));
     }

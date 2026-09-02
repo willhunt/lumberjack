@@ -10,6 +10,8 @@ pub mod check;
 pub mod equation;
 pub mod export;
 pub mod config;
+/// How plots are laid out. Read by every interface, drawn by none of them.
+pub mod plot_config;
 pub mod project;
 pub mod session;
 pub mod storage;

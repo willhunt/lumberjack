@@ -14,6 +14,20 @@ use serial_stream:: { SerialStream, SerialStreamConfig };
 use crate::device::DeviceInterface;
 use serde::{ Deserialize, Serialize };
 
+/// Remove one item from a channel list, if it is there.
+///
+/// One function rather than the same bounds check written out per backend,
+/// since the lists differ only in what they hold.
+fn remove_at<T>(channels: &mut Vec<T>, index: usize) -> bool {
+    match index < channels.len() {
+        true => {
+            channels.remove(index);
+            true
+        }
+        false => false,
+    }
+}
+
 pub trait HardwareDataAquisition {
     fn read(&mut self) -> Result<Vec<Vec<DataPoint>>>;
 }
@@ -73,6 +87,212 @@ impl HardwareConfig {
             HardwareConfig::NiDaqmx(_) => SampleRate::PerRead,
             HardwareConfig::SerialStream(_) => SampleRate::Unknown,
             HardwareConfig::None => SampleRate::Unknown,
+        }
+    }
+
+    /// What kind of hardware this is, spelled as the config file spells it.
+    ///
+    /// The same names `serde(tag = "type")` writes, so an interface naming a
+    /// backend and a file naming one cannot drift apart.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            HardwareConfig::MockHardware(_) => "MockHardware",
+            HardwareConfig::PicoHrdl(_) => "PicoHrdl",
+            HardwareConfig::NiDaqmx(_) => "NiDaqmx",
+            HardwareConfig::SerialStream(_) => "SerialStream",
+            HardwareConfig::None => "None",
+        }
+    }
+
+    /// The kinds of hardware a device can be, spelled as `type_name` spells
+    /// them. What an interface offers when somebody is adding a device.
+    ///
+    /// `None` is not among them: it is what a device with nothing configured
+    /// is, not something anybody chooses.
+    pub const TYPE_NAMES: [&'static str; 4] =
+        ["MockHardware", "PicoHrdl", "NiDaqmx", "SerialStream"];
+
+    /// An empty configuration of the named kind, for a device being created.
+    ///
+    /// The starting values come from each backend's own `Default`, so what a
+    /// new serial device or a new Pico begins as is decided where the rest of
+    /// that backend is, not by whoever is drawing the form.
+    pub fn of_type(type_name: &str) -> Option<HardwareConfig> {
+        match type_name {
+            "MockHardware" => Some(HardwareConfig::MockHardware(MockHardwareConfig::default())),
+            "PicoHrdl" => Some(HardwareConfig::PicoHrdl(PicoHrdlConfig::default())),
+            "NiDaqmx" => Some(HardwareConfig::NiDaqmx(NiDaqmxConfig::default())),
+            "SerialStream" => Some(HardwareConfig::SerialStream(SerialStreamConfig::default())),
+            _ => None,
+        }
+    }
+
+    /// What this hardware is, in as much as the config can say.
+    ///
+    /// The kind and how it samples, which is all that is knowable without the
+    /// device: what model it actually is has to be asked of the hardware, and
+    /// on a machine where it is not plugged in there is nothing to ask. So this
+    /// is the answer to fall back on rather than showing nothing.
+    pub fn describe(&self) -> String {
+        match self {
+            HardwareConfig::MockHardware(config) => match config.acquisition {
+                mock_hardware::Acquisition::Polled => "Mock, polled".to_string(),
+                mock_hardware::Acquisition::Streaming { sample_interval_ms } => {
+                    format!("Mock, streaming every {} ms", sample_interval_ms)
+                }
+            },
+            HardwareConfig::PicoHrdl(config) => match config.acquisition {
+                pico_hrdl::Acquisition::Polled => "Pico ADC, polled".to_string(),
+                pico_hrdl::Acquisition::Streaming { sample_interval_ms, .. } => {
+                    format!("Pico ADC, streaming every {} ms", sample_interval_ms)
+                }
+            },
+            HardwareConfig::NiDaqmx(_) => "NI DAQmx, polled".to_string(),
+            HardwareConfig::SerialStream(config) => {
+                format!("Serial stream, {} baud", config.baudrate)
+            }
+            HardwareConfig::None => "Nothing configured".to_string(),
+        }
+    }
+
+    /// What is wrong with this hardware's channels, in its own words.
+    ///
+    /// Each backend judges its own, because the rules are not shared: a Pico
+    /// differential pair starts on an odd channel and takes the one above,
+    /// while NI's takes the one four above. An interface offering those
+    /// settings can report the answer without knowing either rule.
+    ///
+    /// Only what is decidable from the config. Whether the device exists and
+    /// has that many inputs needs the hardware, and is found at connect.
+    pub fn channel_problem(&self) -> Option<String> {
+        let checked = match self {
+            HardwareConfig::PicoHrdl(config) => pico_hrdl::check_channels(config),
+            // No input count: this is the desk answer, and how many inputs the
+            // device has is the driver's to say. An interface showing this is
+            // looking at a config, not at hardware.
+            HardwareConfig::NiDaqmx(config) => ni_daqmx::check_channels(config, None),
+            HardwareConfig::MockHardware(_) => Ok(()),
+            HardwareConfig::SerialStream(_) => Ok(()),
+            HardwareConfig::None => Ok(()),
+        };
+        checked.err().map(|error| error.to_string())
+    }
+
+    /// Add a channel, bound to whatever input comes next.
+    ///
+    /// The binding is a guess this makes so a new channel is usable rather
+    /// than invalid: the input after the last one in use, or the first if
+    /// there are none. Each backend counts its own inputs, because they do not
+    /// count alike — a Pico numbers from 1 and NI from 0, and what "the next
+    /// one" means is theirs to say.
+    pub fn add_channel(&mut self, info: ChannelInfo) -> bool {
+        match self {
+            HardwareConfig::MockHardware(config) => {
+                config.channels.push(mock_hardware::MockHardwareChannel {
+                    info,
+                    input: mock_hardware::MockHardwareInput::Random,
+                });
+                true
+            }
+            HardwareConfig::PicoHrdl(config) => {
+                let next = config.channels.iter().map(|channel| channel.channel).max();
+                config.channels.push(pico_hrdl::PicoHrdlChannel {
+                    info,
+                    // Analog inputs count from 1 on these units.
+                    channel: next.map_or(1, |highest| highest + 1),
+                    // The widest range, which cannot clip whatever is wired to
+                    // it. Narrowing it is a decision about the signal, and
+                    // belongs to whoever knows what that signal is.
+                    range: picolog::hrdl::VoltageRange::MilliVolts2500,
+                    single_ended: true,
+                });
+                true
+            }
+            HardwareConfig::NiDaqmx(config) => {
+                let next = config.channels.iter().map(|channel| channel.channel).max();
+                config.channels.push(ni_daqmx::NiDaqmxChannel {
+                    info,
+                    // ai0 upwards.
+                    channel: next.map_or(0, |highest| highest + 1),
+                    range: (-10.0, 10.0),
+                    single_ended: true,
+                });
+                true
+            }
+            HardwareConfig::SerialStream(config) => {
+                let next = config.channels.iter().map(|channel| channel.index).max();
+                config.channels.push(serial_stream::SerialStreamChannel {
+                    info,
+                    // Fields of a frame, counted from zero.
+                    index: next.map_or(0, |highest| highest + 1),
+                });
+                true
+            }
+            HardwareConfig::None => false,
+        }
+    }
+
+    /// Take one channel off this hardware.
+    ///
+    /// Returns whether there was one to take. The binding goes with it: a
+    /// channel is its description and where its data comes from together, and
+    /// removing half of either would leave the other pointing at nothing.
+    pub fn remove_channel(&mut self, index: usize) -> bool {
+        match self {
+            HardwareConfig::MockHardware(config) => remove_at(&mut config.channels, index),
+            HardwareConfig::PicoHrdl(config) => remove_at(&mut config.channels, index),
+            HardwareConfig::NiDaqmx(config) => remove_at(&mut config.channels, index),
+            HardwareConfig::SerialStream(config) => remove_at(&mut config.channels, index),
+            HardwareConfig::None => false,
+        }
+    }
+
+    /// One channel's description, to read.
+    ///
+    /// `channel_infos` copies the lot, which is what most callers want. This
+    /// is for one that needs to hold on to a channel rather than take it away:
+    /// an interface showing what a channel is called, where a copy would have
+    /// to be kept alive alongside the config it came from.
+    pub fn channel_info(&self, index: usize) -> Option<&ChannelInfo> {
+        match self {
+            HardwareConfig::MockHardware(config) => {
+                config.channels.get(index).map(|channel| &channel.info)
+            }
+            HardwareConfig::PicoHrdl(config) => {
+                config.channels.get(index).map(|channel| &channel.info)
+            }
+            HardwareConfig::NiDaqmx(config) => {
+                config.channels.get(index).map(|channel| &channel.info)
+            }
+            HardwareConfig::SerialStream(config) => {
+                config.channels.get(index).map(|channel| &channel.info)
+            }
+            HardwareConfig::None => None,
+        }
+    }
+
+    /// One channel's description, to change.
+    ///
+    /// The counterpart of `channel_infos`, which can only hand out copies.
+    /// Editing what a channel is called and what its numbers mean belongs to
+    /// whoever is configuring a rig, and doing it through here keeps the
+    /// reaching into each backend's own channel type in this file, where the
+    /// differences between vendors already live.
+    pub fn channel_info_mut(&mut self, index: usize) -> Option<&mut ChannelInfo> {
+        match self {
+            HardwareConfig::MockHardware(config) => {
+                config.channels.get_mut(index).map(|channel| &mut channel.info)
+            }
+            HardwareConfig::PicoHrdl(config) => {
+                config.channels.get_mut(index).map(|channel| &mut channel.info)
+            }
+            HardwareConfig::NiDaqmx(config) => {
+                config.channels.get_mut(index).map(|channel| &mut channel.info)
+            }
+            HardwareConfig::SerialStream(config) => {
+                config.channels.get_mut(index).map(|channel| &mut channel.info)
+            }
+            HardwareConfig::None => None,
         }
     }
 

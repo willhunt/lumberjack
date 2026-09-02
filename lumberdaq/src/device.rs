@@ -19,9 +19,13 @@ pub trait DeviceInterface {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+/// What a device is called.
+///
+/// The name and nothing else. What the hardware *is* — a USB-6001, an ADC-24 —
+/// is the hardware's to say and changes with what is plugged in, so it is asked
+/// at the time rather than written down here and left to go stale.
 pub struct DeviceInfo {
     pub name: String,
-    pub description: String,
 }
 
 #[derive(Debug, Default)]
@@ -108,12 +112,9 @@ impl Device {
         Ok(())
     }
 
-    pub fn new(name: String, description: String, hardware: Hardware) -> Device {
+    pub fn new(name: String, hardware: Hardware) -> Device {
         Device {
-            info: DeviceInfo {
-                name: name,
-                description: description,
-            },
+            info: DeviceInfo { name },
             read_interval: Duration::from_millis(default_read_interval_ms()),
             channels: vec![],
             hardware: hardware,
@@ -276,7 +277,7 @@ mod tests {
     /// the second has a cause to report.
     #[test]
     fn a_new_device_has_not_been_tried_rather_than_having_failed() {
-        let device = Device::new("Test".to_string(), "-".to_string(), Hardware::None);
+        let device = Device::new("Test".to_string(), Hardware::None);
         assert!(!device.is_connected());
         assert!(matches!(device.connection, ConnectionStatus::NeverConnected));
         assert!(device.disconnection_cause().is_none());
@@ -285,7 +286,7 @@ mod tests {
     #[test]
     fn a_failed_connection_keeps_the_error_itself() {
         // Hardware::None always refuses to connect.
-        let mut device = Device::new("Test".to_string(), "-".to_string(), Hardware::None);
+        let mut device = Device::new("Test".to_string(), Hardware::None);
         assert!(!device.connect());
         assert!(!device.is_connected());
         // Matching the stored variant rather than a message: the whole point of
@@ -319,7 +320,7 @@ mod tests {
 
     #[test]
     fn reading_a_disconnected_device_does_not_produce_data() {
-        let mut device = Device::new("Test".to_string(), "-".to_string(), Hardware::None);
+        let mut device = Device::new("Test".to_string(), Hardware::None);
         // The first read is due a retry. It fails, but a device being
         // unavailable is a state rather than a failure of this call, so the
         // cause is recorded and Ok comes back.

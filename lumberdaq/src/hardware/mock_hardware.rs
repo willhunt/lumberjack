@@ -45,7 +45,6 @@ impl Default for Acquisition {
 /// Everything needed to describe a mock device in a config file.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MockHardwareConfig {
-    pub description: String,
     #[serde(default)]
     pub acquisition: Acquisition,
     pub channels: Vec<MockHardwareChannel>,
@@ -65,7 +64,6 @@ pub struct MockHardwareChannel {
 impl Default for MockHardwareConfig {
     fn default() -> MockHardwareConfig {
         MockHardwareConfig {
-            description: "This is a mock device that uses no hardware. It is used for testing and development purposes.".to_string(),
             acquisition: Acquisition::default(),
             channels: vec![],
         }
@@ -216,9 +214,9 @@ impl MockHardwareInput {
     }
 }
 
-pub fn create_device(name: String, description: String) -> Result<Device> {
+pub fn create_device(name: String) -> Result<Device> {
     let hardware = MockHardware::new()?;
-    Ok(Device::new(name, description, Hardware::MockHardware(hardware)))
+    Ok(Device::new(name, Hardware::MockHardware(hardware)))
 }
 
 fn add_mock_channel(
@@ -268,7 +266,6 @@ mod tests {
 
     fn sine_device(frequency_hz: f64, acquisition: Acquisition) -> MockHardware {
         MockHardware::from_config(MockHardwareConfig {
-            description: "-".to_string(),
             acquisition: acquisition,
             channels: vec![MockHardwareChannel {
                 info: ChannelInfo {

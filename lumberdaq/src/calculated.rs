@@ -519,7 +519,7 @@ mod tests {
 
     fn calculator(channels: Vec<CalculatedChannel>) -> Result<Calculator> {
         Calculator::from_config(CalculatedDevice {
-            info: DeviceInfo { name: "Derived".to_string(), description: "-".to_string() },
+            info: DeviceInfo { name: "Derived".to_string() },
             channels: channels,
         })
     }
@@ -531,7 +531,7 @@ mod tests {
             .collect();
         Calculator::with_rates(
             CalculatedDevice {
-                info: DeviceInfo { name: "Derived".to_string(), description: "-".to_string() },
+                info: DeviceInfo { name: "Derived".to_string() },
                 channels: channels,
             },
             &declared,

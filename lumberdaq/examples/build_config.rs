@@ -22,13 +22,12 @@ fn main() -> Result<()> {
     let project = Project::create(&directory)?;
 
     // A device with no hardware behind it, for running with nothing attached.
-    let mut mock = mock_hardware::create_device("Test device".to_string(), "-".to_string())?;
+    let mut mock = mock_hardware::create_device("Test device".to_string())?;
     mock_hardware::add_channel_random(&mut mock, "Random 1".to_string())?;
 
     // A device streaming comma separated frames over serial.
     let mut serial = serial_stream::create_device(
         "Serial test device".to_string(),
-        "Device streaming over serial.".to_string(),
         "COM3".to_string(),
         115200,
     )?;

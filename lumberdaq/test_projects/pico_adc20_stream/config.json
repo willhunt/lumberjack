@@ -18,14 +18,12 @@
         "channels": [
           {
             "name": "Input 1",
-            "unit": "V",
             "description": "Analog input 1, single ended",
             "channel": 1,
             "range": "milli_volts2500"
           },
           {
             "name": "Input 2",
-            "unit": "V",
             "description": "Analog input 2, single ended",
             "channel": 2,
             "range": "milli_volts2500"

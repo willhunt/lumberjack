@@ -5,8 +5,14 @@ use crate::hardware::{ Hardware, HardwareDataAquisition };
 use crate::{ Error, Result };
 use picolog::hrdl::{
     can_be_differential, counts_to_volts, differential_partner, ConversionTime, Hrdl,
-    VoltageRange, MAX_CHANNEL, MIN_CHANNEL,
+    MAX_CHANNEL, MIN_CHANNEL,
 };
+// Re-exported because a channel's range is part of this backend's public
+// configuration: anything editing one has to be able to name the type, and
+// making it reach for picolog to do so would spread the dependency further
+// than the one backend that needs it.
+pub use picolog::hrdl::VoltageRange;
+pub use picolog::hrdl::{MAX_CHANNEL as HIGHEST_CHANNEL, MIN_CHANNEL as LOWEST_CHANNEL};
 use serde::{ Deserialize, Serialize };
 use std::time::Duration;
 
@@ -72,9 +78,11 @@ fn default_buffer_scans() -> u32 {
 }
 
 /// Everything needed to describe an ADC-20/24 in a config file.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct PicoHrdlConfig {
-    pub description: String,
+    // Every field below either has a Default of its own or is a String or a
+    // Vec, so a new unit can be described by `PicoHrdlConfig::default()` and
+    // then have its channels added.
     /// How long the converter integrates for, per channel. Longer is quieter
     /// and slower.
     #[serde(default)]
@@ -125,7 +133,6 @@ pub struct PicoHrdl {
 impl PicoHrdl {
     pub fn new() -> Result<PicoHrdl> {
         PicoHrdl::from_config(PicoHrdlConfig {
-            description: "Pico Technology high resolution data logger.".to_string(),
             conversion_time: ConversionTime::default(),
             mains_sixty_hertz: false,
             acquisition: Acquisition::default(),
@@ -133,8 +140,15 @@ impl PicoHrdl {
         })
     }
 
-    pub fn from_config(config: PicoHrdlConfig) -> Result<PicoHrdl> {
+    pub fn from_config(mut config: PicoHrdlConfig) -> Result<PicoHrdl> {
         check_channels(&config)?;
+        // An analog input measures volts and nothing else, so a channel
+        // need not say so. One that claims otherwise without a scale to
+        // make it true is refused here rather than mislabelling a run.
+        for channel in config.channels.iter_mut() {
+            let named = channel.info.name.clone();
+            channel.info.settle_voltage_unit(&named)?;
+        }
         Ok(PicoHrdl {
             config: config,
             unit: None,
@@ -174,7 +188,27 @@ impl PicoHrdl {
 /// work is refused before anything is plugged in or recorded. The driver would
 /// reject most of this too, but only once a run was being started, and with
 /// less to say about why.
-fn check_channels(config: &PicoHrdlConfig) -> Result<()> {
+/// Which unit is attached: `ADC-20`, `ADC-24`.
+///
+/// The unit's own answer rather than anything the config claims, which is the
+/// point: a project written for one model opened with the other should say so
+/// rather than looking right until a channel is out of range. `None` when there
+/// is none attached, no driver, or it is already open.
+pub fn variant() -> Option<String> {
+    let unit = Hrdl::open().ok()?;
+    unit.info(picolog::hrdl::Info::Variant).ok().filter(|variant| !variant.is_empty())
+}
+
+/// How many analog inputs the attached unit has.
+///
+/// An ADC-20 has eight where an ADC-24 has sixteen, and only the unit knows
+/// which it is. `None` when there is none attached, no driver, or it is already
+/// open — a unit being read by a run in progress cannot also be asked.
+pub fn input_count() -> Option<u16> {
+    Hrdl::open().and_then(|unit| unit.channel_count()).ok()
+}
+
+pub(crate) fn check_channels(config: &PicoHrdlConfig) -> Result<()> {
     let mut configured: Vec<u16> = Vec::new();
     for channel in config.channels.iter() {
         // Guarded before the arithmetic below, which would otherwise wrap.
@@ -331,9 +365,9 @@ impl HardwareDataAquisition for PicoHrdl {
     }
 }
 
-pub fn create_device(name: String, description: String) -> Result<Device> {
+pub fn create_device(name: String) -> Result<Device> {
     let hardware = PicoHrdl::new()?;
-    Ok(Device::new(name, description, Hardware::PicoHrdl(hardware)))
+    Ok(Device::new(name, Hardware::PicoHrdl(hardware)))
 }
 
 pub fn add_channel(
@@ -373,7 +407,6 @@ mod tests {
 
     fn config_with(channels: usize, conversion: ConversionTime) -> PicoHrdlConfig {
         PicoHrdlConfig {
-            description: "-".to_string(),
             conversion_time: conversion,
             mains_sixty_hertz: false,
             acquisition: Acquisition::Polled,
@@ -502,7 +535,6 @@ mod tests {
 
     fn differential(channels: &[(u16, bool)]) -> PicoHrdlConfig {
         PicoHrdlConfig {
-            description: "-".to_string(),
             conversion_time: ConversionTime::Ms60,
             mains_sixty_hertz: false,
             acquisition: Acquisition::Polled,

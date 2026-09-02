@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "history_seconds": 60,
+  "plots": [
+    {
+      "number": 1,
+      "name": "Pressure",
+      "channels": [
+        {
+          "device": "Signal generator",
+          "channel": "Sine 1Hz"
+        },
+        {
+          "device": "Arduino 1",
+          "channel": "Differential Pressure"
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "name": "Fast sine",
+      "channels": [
+        {
+          "device": "Signal generator",
+          "channel": "Sine 5Hz"
+        }
+      ]
+    },
+    {
+      "number": 3,
+      "name": "Both together",
+      "channels": [
+        {
+          "device": "Signal generator",
+          "channel": "Sine 1Hz"
+        },
+        {
+          "device": "Signal generator",
+          "channel": "Sine 5Hz"
+        }
+      ]
+    },
+    {
+      "number": 4,
+      "channels": []
+    }
+  ]
+}

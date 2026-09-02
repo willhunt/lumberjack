@@ -48,7 +48,7 @@ pub struct SqliteSink {
 /// Stamped into the file so a database written by a different version of the
 /// schema is refused with an explanation rather than a raw SQL error about a
 /// missing column. Bump it whenever the tables change.
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 impl SqliteSink {
     pub fn new(path: &Path) -> Result<SqliteSink> {
@@ -132,7 +132,10 @@ impl DataSink for SqliteSink {
                  id          INTEGER PRIMARY KEY,
                  run_id      INTEGER NOT NULL REFERENCES runs(id),
                  name        TEXT NOT NULL,
-                 description TEXT NOT NULL,
+                 -- No description: a device has a name, and what the hardware
+                 -- is lives in the column below. The channels table keeps
+                 -- theirs, which says what a reading means rather than
+                 -- repeating what the device is called.
                  -- The whole hardware configuration as json: port, baud rate,
                  -- frame pattern, channel bindings. Names alone cannot say
                  -- whether two runs measured the same thing; this can, and it
@@ -174,9 +177,9 @@ impl DataSink for SqliteSink {
         for device in config.devices.iter() {
             let hardware = serde_json::to_string(&device.hardware)?;
             self.connection.execute(
-                "INSERT INTO devices (run_id, name, description, hardware)
-                 VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![run_id, device.info.name, device.info.description, hardware],
+                "INSERT INTO devices (run_id, name, hardware)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![run_id, device.info.name, hardware],
             )?;
             let device_id = self.connection.last_insert_rowid();
 
@@ -205,14 +208,9 @@ impl DataSink for SqliteSink {
         if let Some(calculated) = &config.calculated {
             let definition = serde_json::to_string(calculated)?;
             self.connection.execute(
-                "INSERT INTO devices (run_id, name, description, hardware)
-                 VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![
-                    run_id,
-                    calculated.info.name,
-                    calculated.info.description,
-                    definition
-                ],
+                "INSERT INTO devices (run_id, name, hardware)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![run_id, calculated.info.name, definition],
             )?;
             let device_id = self.connection.last_insert_rowid();
 
@@ -309,11 +307,9 @@ mod tests {
             devices: vec![DeviceConfig {
                 info: DeviceInfo {
                     name: "Serial test device".to_string(),
-                    description: "-".to_string(),
                 },
                 read_interval_ms: 100,
                 hardware: HardwareConfig::SerialStream(SerialStreamConfig {
-                    description: "-".to_string(),
                     port: port.to_string(),
                     baudrate: 115200,
                     frame_pattern: r"#([^#$]*)\$".to_string(),

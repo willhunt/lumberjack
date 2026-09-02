@@ -1,6 +1,8 @@
-use crate::Result;
+use crate::{ Error, Result };
+use crate::calculated::ChannelRef;
 use crate::check::{ check_config, CheckReport };
 use crate::config::{ DaqConfig, StorageFormat };
+use crate::plot_config::PlotConfig;
 use crate::configuration::{ read_configuration_file, write_configuration_file };
 use crate::daq::Daq;
 use crate::storage::DataSink;
@@ -12,10 +14,16 @@ use std::path::{ Path, PathBuf };
 ///
 /// ```text
 /// my_project/
-///     config.json     the setup: devices, channels, ports
-///     results.csv     the data
-///     results.json    the header describing that data
+///     config.json       the setup: devices, channels, ports
+///     plot_config.json  how somebody is looking at it, if anybody has said
+///     results.csv       the data
+///     results.json      the header describing that data
 /// ```
+///
+/// The layout is separate from the setup because they are different things: a
+/// rig is the same rig whether or not anybody has put a channel on a plot, and
+/// a layout changes every time somebody drags one there. Reading both through
+/// here is what keeps them agreeing without making them one file.
 ///
 /// The directory is deliberately not recorded inside config.json. A project is
 /// wherever its files are, so the whole folder can be moved, copied or handed
@@ -70,8 +78,40 @@ impl Project {
         self.directory.join("export")
     }
 
+    /// How this project's plots are laid out, if anybody has saved a layout.
+    pub fn layout_path(&self) -> PathBuf {
+        crate::plot_config::path(&self.directory)
+    }
+
     pub fn read_config(&self) -> Result<DaqConfig> {
         read_configuration_file(&self.config_path())
+    }
+
+    /// The saved plot layout, or `None` where there is not one.
+    ///
+    /// Kept a separate file from the rig it belongs to, and read through here
+    /// so that every interface finds it the same way rather than each deciding
+    /// for itself where a layout lives.
+    pub fn read_layout(&self) -> Result<Option<PlotConfig>> {
+        crate::plot_config::read(&self.directory).map_err(Error::from)
+    }
+
+    /// Save the plot layout beside the rig, returning where it went.
+    pub fn write_layout(&self, layout: &PlotConfig) -> Result<PathBuf> {
+        crate::plot_config::write(&self.directory, layout).map_err(Error::from)
+    }
+
+    /// Which channels the saved layout names that the setup does not have.
+    ///
+    /// The two files can disagree — a channel renamed in one and not the other
+    /// — and this is where that is found out, so both interfaces report it the
+    /// same way instead of each checking for itself. No layout and no rig
+    /// problem both come back empty.
+    pub fn dangling_plot_channels(&self) -> Result<Vec<ChannelRef>> {
+        let Some(layout) = self.read_layout()? else {
+            return Ok(Vec::new());
+        };
+        Ok(layout.dangling(&self.read_config()?))
     }
 
     /// Build the whole system this directory describes, ready to connect.

@@ -23,7 +23,6 @@ use std::time::Duration;
 /// Everything needed to describe a serial device in a config file.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SerialStreamConfig {
-    pub description: String,
     pub port: String,
     pub baudrate: u32,
     /// A regular expression matching one complete frame, used both to find
@@ -60,6 +59,94 @@ pub struct SerialStreamChannel {
 /// name a pattern, so configs written before this setting existed still load.
 fn default_frame_pattern() -> String {
     r"#([^#$]*)\$".to_string()
+}
+
+/// A serial port that is plugged in at the moment.
+///
+/// Enough to choose one by: `COM7` alone is no help when three things are
+/// plugged in, and the name the device reports is how somebody knows which is
+/// theirs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortOption {
+    /// What to put in the config: `COM7`, `/dev/ttyUSB0`.
+    pub name: String,
+    /// What the device calls itself, where it says. Empty when it does not.
+    pub product: String,
+    /// USB ports are the ones an instrument is usually on. A built-in COM1 on
+    /// a desktop is a port, but rarely the one being looked for.
+    pub usb: bool,
+}
+
+impl PortOption {
+    /// The port as a line somebody picks from a list.
+    pub fn label(&self) -> String {
+        match self.product.is_empty() {
+            true => self.name.clone(),
+            false => format!("{} — {}", self.name, self.product),
+        }
+    }
+}
+
+/// Every serial port currently attached.
+///
+/// USB ports first, since that is where an instrument usually is, and each
+/// group in the order the operating system gave them. An empty list is a
+/// perfectly ordinary answer: it means nothing is plugged in.
+///
+/// This asks the operating system, so it is a moment's work rather than free.
+/// Call it when a list is about to be shown, not on every redraw.
+pub fn available_ports() -> Vec<PortOption> {
+    let mut ports: Vec<PortOption> = match serialport::available_ports() {
+        Ok(ports) => ports
+            .into_iter()
+            .map(|port| {
+                let (product, usb) = match &port.port_type {
+                    serialport::SerialPortType::UsbPort(info) => {
+                        // The product name if it gives one, else the maker's
+                        // name, else nothing rather than a made-up label.
+                        let product = info
+                            .product
+                            .clone()
+                            .or_else(|| info.manufacturer.clone())
+                            .unwrap_or_default();
+                        (product, true)
+                    }
+                    _ => (String::new(), false),
+                };
+
+                PortOption { name: port.port_name, product, usb }
+            })
+            .collect(),
+        // Nothing to offer is the same answer whether the list was empty or
+        // could not be read. A rig is not misconfigured because a port scan
+        // failed, and the port can still be typed in.
+        Err(_) => Vec::new(),
+    };
+
+    ports.sort_by_key(|port| !port.usb);
+    ports
+}
+
+/// The port to suggest for a device nobody has configured yet.
+pub fn first_usb_port() -> Option<String> {
+    available_ports().into_iter().find(|port| port.usb).map(|port| port.name)
+}
+
+impl Default for SerialStreamConfig {
+    /// A device that still has to be told which port it is on.
+    ///
+    /// The port is left empty rather than guessed at: `COM1` is a real port on
+    /// most Windows machines and almost never the right one, so a wrong guess
+    /// would be tried and fail confusingly. Empty says plainly that nobody has
+    /// said yet.
+    fn default() -> SerialStreamConfig {
+        SerialStreamConfig {
+            port: String::new(),
+            baudrate: 115200,
+            frame_pattern: default_frame_pattern(),
+            channels: vec![],
+        }
+    }
 }
 
 const FIELD_SEPARATOR: char = ',';
@@ -103,7 +190,6 @@ pub struct SerialStream {
 impl SerialStream {
     pub fn new(port: String, baudrate: u32) -> Result<SerialStream> {
         SerialStream::from_config(SerialStreamConfig {
-            description: "Device streaming over serial.".to_string(),
             port: port,
             baudrate: baudrate,
             frame_pattern: default_frame_pattern(),
@@ -359,9 +445,9 @@ impl HardwareDataAquisition for SerialStream {
     }
 }
 
-pub fn create_device(name: String, description: String, port: String, baudrate: u32) -> Result<Device> {
+pub fn create_device(name: String, port: String, baudrate: u32) -> Result<Device> {
     let hardware = SerialStream::new(port, baudrate)?;
-    Ok(Device::new(name, description, Hardware::SerialStream(hardware)))
+    Ok(Device::new(name, Hardware::SerialStream(hardware)))
 }
 
 pub fn add_channel(device: &mut Device, name: String, description: String, index: i64, unit: String) -> Result<()> {
@@ -556,7 +642,6 @@ mod tests {
     #[test]
     fn a_bad_pattern_is_rejected_when_the_device_is_built() {
         let config = SerialStreamConfig {
-            description: "Broken".to_string(),
             port: "COM1".to_string(),
             baudrate: 9600,
             frame_pattern: r"#([$".to_string(),

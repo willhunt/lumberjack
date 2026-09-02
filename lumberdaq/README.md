@@ -318,6 +318,10 @@ the voltage it was measured as. `x` is the raw measurement:
 Any channel on any device can take a `scale`; leave it out and readings are
 stored as they came.
 
+On hardware that only ever measures volts — a Pico or an NI analog input — a
+scale is also the only way the unit is allowed to change. Without one the unit is
+`V` and saying otherwise is refused; with one it is whatever the scale produces.
+
 ### Keeping the numbers editable
 
 Written that way, the constants dissolve into the arithmetic. `x / 120` gives no
@@ -395,6 +399,12 @@ share a timestamp exactly.
 
 Nothing here needs NI software installed unless a project actually contains one
 of these devices — see [drivers](../README.md#drivers).
+
+An analog input measures volts and nothing else, so a channel need not say so:
+leave `unit` out and it becomes `V`. A channel that claims some other unit
+without a scale to make it true is refused, since the recorded number would be
+the voltage while every plot and exported column said otherwise. A **scaled**
+channel may say whatever the scale produces — that is what a scale is for.
 
 ### Differential inputs on an NI device
 

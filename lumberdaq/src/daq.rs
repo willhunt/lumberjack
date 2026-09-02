@@ -348,9 +348,9 @@ mod tests {
     /// A mock device always connects; Hardware::None never does. Together they
     /// stand in for a rig where one instrument is unplugged.
     fn one_good_one_bad() -> Daq {
-        let mut good = mock_hardware::create_device("Good".to_string(), "-".to_string()).unwrap();
+        let mut good = mock_hardware::create_device("Good".to_string()).unwrap();
         mock_hardware::add_channel_random(&mut good, "Random".to_string()).unwrap();
-        let bad = Device::new("Bad".to_string(), "-".to_string(), Hardware::None);
+        let bad = Device::new("Bad".to_string(), Hardware::None);
         Daq::new("Test".to_string(), "-".to_string(), vec![good, bad]).unwrap()
     }
 

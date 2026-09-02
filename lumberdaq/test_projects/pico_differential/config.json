@@ -19,7 +19,6 @@
         "channels": [
           {
             "name": "Delta P",
-            "unit": "V",
             "description": "Differential across inputs 1 and 2",
             "channel": 1,
             "range": "milli_volts2500",
@@ -27,7 +26,6 @@
           },
           {
             "name": "Line",
-            "unit": "V",
             "description": "Differential across inputs 3 and 4",
             "channel": 3,
             "range": "milli_volts625",

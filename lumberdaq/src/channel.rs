@@ -9,6 +9,12 @@ use std::collections::BTreeMap;
 /// The name a scale reads its channel's own measurement under.
 const VARIABLE: &str = "x";
 
+/// What an analog input measures, before anything is done to it.
+const VOLTS: &str = "V";
+
+/// Spellings of it that somebody might reasonably write.
+const VOLT_SPELLINGS: [&str; 3] = ["v", "volt", "volts"];
+
 /// Where the measurement sits among a scale's values. The constants follow it.
 const VALUE: usize = 0;
 
@@ -91,6 +97,13 @@ impl Scale {
 /// results database.
 pub struct ChannelInfo {
     pub name: String,
+    /// What the recorded value is in.
+    ///
+    /// Optional, because hardware that only ever measures one thing can say so
+    /// itself: an analog input reads volts and there is no sense in making
+    /// somebody type that for every channel. Backends that cannot know leave it
+    /// as it was given, since guessing a unit is worse than having none.
+    #[serde(default)]
     pub unit: String,
     pub description: String,
     /// How to turn the raw measurement into the unit named above.
@@ -116,6 +129,36 @@ pub struct Channel {
     scale: Option<CompiledScale>,
     pub datapoints: Vec<DataPoint>,
     pub datapoint_last: Option<DataPoint>,
+}
+
+impl ChannelInfo {
+    /// Settle the unit of a channel whose hardware only ever measures volts.
+    ///
+    /// Left out, it becomes volts, so a Pico or NI channel need not say what
+    /// every one of them measures.
+    ///
+    /// Given as something else, it depends on whether the channel is scaled. A
+    /// scale is what turns volts into litres per minute, so the unit follows it
+    /// and any unit is right. Without one, the recorded number *is* the
+    /// voltage, and calling it bar would make every plot and every exported
+    /// column say something untrue about data nothing had converted.
+    pub fn settle_voltage_unit(&mut self, channel: &str) -> Result<()> {
+        if self.unit.trim().is_empty() {
+            self.unit = VOLTS.to_string();
+            return Ok(());
+        }
+        if self.scale.is_some() {
+            return Ok(());
+        }
+        let given = self.unit.trim().to_lowercase();
+        match VOLT_SPELLINGS.contains(&given.as_str()) {
+            true => Ok(()),
+            false => Err(Error::UnitIsNotVolts {
+                channel: channel.to_string(),
+                unit: self.unit.clone(),
+            }),
+        }
+    }
 }
 
 impl Channel {
@@ -345,6 +388,44 @@ mod tests {
             Ok(_) => panic!("a scale that should have been refused was accepted"),
             Err(error) => error,
         }
+    }
+
+    #[test]
+    fn an_analog_input_need_not_say_it_measures_volts() {
+        let mut given = info(None);
+        given.unit = String::new();
+        given.settle_voltage_unit("Dev1/ai0").unwrap();
+        assert_eq!(given.unit, "V");
+    }
+
+    #[test]
+    fn however_it_is_spelled() {
+        for spelling in ["V", "v", "Volts", "volt", " V "] {
+            let mut given = info(None);
+            given.unit = spelling.to_string();
+            assert!(given.settle_voltage_unit("Dev1/ai0").is_ok(), "{:?} refused", spelling);
+        }
+    }
+
+    #[test]
+    fn an_unscaled_input_may_not_claim_to_measure_something_else() {
+        // The recorded number is the voltage. Calling it bar would make every
+        // plot and every exported column say something untrue.
+        let mut given = info(None);
+        given.unit = "bar".to_string();
+        let error = given.settle_voltage_unit("Dev1/ai0").unwrap_err();
+        assert!(matches!(error, Error::UnitIsNotVolts { .. }), "{}", error);
+        // And the message has to say how to do the thing they meant.
+        assert!(error.to_string().contains("scale"), "{}", error);
+    }
+
+    #[test]
+    fn a_scaled_input_may_say_whatever_the_scale_produces() {
+        // Which is the whole point of a scale.
+        let mut given = info(equation("x * 5"));
+        given.unit = "bar".to_string();
+        assert!(given.settle_voltage_unit("Dev1/ai0").is_ok());
+        assert_eq!(given.unit, "bar");
     }
 
     #[test]
