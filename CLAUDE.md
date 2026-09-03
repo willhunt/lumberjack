@@ -115,7 +115,7 @@ direct — I'd rather be told the design is wrong than be handed a polite patch.
 Verify against the code before relying on this; it will drift.
 
 ```
-Daq            — top-level session: info, Vec<Device>, storage paths, csv::Writer
+Daq            — top-level session: info, Vec<Device>, storage paths, sink
  └─ Device     — info, Vec<Channel>, Hardware, ConnectionStatus
      ├─ Channel   — info + accumulated DataPoints
      └─ Hardware  — enum dispatch over concrete backends
@@ -148,7 +148,9 @@ reasoning — they're not sacred):
   fairly tangled with the `Daq` type.
 - No tests anywhere in `lumberdaq`. Adding some is a good learning exercise and I'd like to
   do it deliberately.
-- `storage_hdf.rs` was deleted; HDF5 output is currently unavailable.
+- `storage_hdf.rs` was deleted; HDF5 output is currently unavailable. Recording
+  straight to csv was dropped too, once `lumberdaq export` could write one file
+  per run from the database.
 
 ## Rust conventions for this repo
 

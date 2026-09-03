@@ -1,57 +1,15 @@
+//! Data reaches storage as *batches*: the datapoints for one channel of one
+//! device, streamed in as they are acquired. Laying those out on disk is the
+//! sink's business, not the caller's.
+//!
+//! What is being measured reaches it once, as the whole `DaqConfig`, when
+//! recording starts.
+
 use crate::Result;
-use crate::channel::ChannelInfo;
 use crate::config::DaqConfig;
-use crate::daq::DaqInfo;
 use crate::datapoint::DataPoint;
-use crate::device::DeviceInfo;
-use serde::{ Deserialize, Serialize };
 use std::sync::atomic::{ AtomicBool, Ordering };
 use std::sync::Arc;
-
-/// Storage is split into two halves.
-///
-/// The *header* describes the test: which devices, which channels, what units.
-/// It is written once, when recording starts, and is the same regardless of
-/// which format the data itself ends up in.
-///
-/// The *batches* are the data, streamed in as it is acquired. A batch is the
-/// datapoints for one channel of one device. Laying those out on disk (long
-/// rows, wide rows, columns) is the sink's business, not the caller's.
-
-#[derive(Serialize, Deserialize)]
-pub struct DeviceHeader {
-    pub info: DeviceInfo,
-    pub channels: Vec<ChannelInfo>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct DaqHeader {
-    pub info: DaqInfo,
-    pub devices: Vec<DeviceHeader>,
-}
-
-impl DaqHeader {
-    /// Flatten a setup into the shape the csv sidecar wants: names and units,
-    /// with the hardware details left out.
-    pub fn from_config(config: &DaqConfig) -> DaqHeader {
-        DaqHeader {
-            info: config.info.clone(),
-            devices: config.devices.iter().map(|device|
-                DeviceHeader {
-                    info: device.info.clone(),
-                    channels: device.hardware.channel_infos(),
-                }
-            ).chain(config.calculated.iter().map(|calculated|
-                // Calculated channels are a device as far as results are
-                // concerned: they have names, units and values over time.
-                DeviceHeader {
-                    info: calculated.info.clone(),
-                    channels: calculated.channels.iter().map(|c| c.info.clone()).collect(),
-                }
-            )).collect(),
-        }
-    }
-}
 
 /// The datapoints acquired for a single channel, on its way to storage.
 pub struct Batch {
@@ -68,11 +26,10 @@ pub struct Batch {
 pub trait DataSink {
     /// Called once before any data, to record what is being measured.
     ///
-    /// This takes the whole setup rather than a flattened header. Names and
-    /// units are enough to label a column, but not enough to say whether two
-    /// runs measured the same thing: that needs the port, the baud rate and
-    /// which field of the frame each channel reads. A sink that only wants the
-    /// labels can call `DaqHeader::from_config`.
+    /// This takes the whole setup rather than a flattened list of names. Names
+    /// and units are enough to label a column, but not enough to say whether
+    /// two runs measured the same thing: that needs the port, the baud rate and
+    /// which field of the frame each channel reads.
     fn init(&mut self, config: &DaqConfig) -> Result<()>;
 
     /// Write one channel's worth of acquired data.
@@ -87,18 +44,20 @@ pub trait DataSink {
 /// Several sinks fed from one run.
 ///
 /// A run has one sink, so recording to more than one place means a sink that is
-/// itself several: CSV alongside SQLite, or a display fed the same data as the
-/// file it is being written to. `Fanout` is a `DataSink` like any other, so
+/// itself several: a second copy on another disk, or a display fed the same
+/// data as the file it is being written to. `Fanout` is a `DataSink` like any other, so
 /// `Daq::set_sink` takes it without knowing the difference.
 ///
 /// ```no_run
 /// use lumberdaq::storage::Fanout;
 /// # use lumberdaq::config::StorageFormat;
+/// # use lumberdaq::storage_sqlite::SqliteSink;
+/// # use std::path::PathBuf;
 /// # let project = lumberdaq::project::Project::new("my_project");
 /// # let mut daq = lumberdaq::open("my_project")?;
 /// let sink = Fanout::new()
-///     .and("sqlite", project.sink(StorageFormat::Sqlite)?)
-///     .and("csv", project.sink(StorageFormat::Csv)?);
+///     .and("database", project.sink(StorageFormat::Sqlite)?)
+///     .and("copy", Box::new(SqliteSink::new(&PathBuf::from("elsewhere.db"))?));
 /// daq.set_sink(Box::new(sink))?;
 /// # Ok::<(), lumberdaq::Error>(())
 /// ```
@@ -203,7 +162,7 @@ impl DataSink for Fanout {
 /// let project = lumberdaq::project::Project::new("my_project");
 /// let recorder = Recorder::new(
 ///     Arc::clone(&recording),
-///     Box::new(move || project.sink_for(StorageFormat::Csv, "first")),
+///     Box::new(move || project.sink_for(StorageFormat::Sqlite, "first")),
 /// );
 /// ```
 pub struct Recorder {

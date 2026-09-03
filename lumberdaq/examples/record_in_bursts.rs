@@ -10,7 +10,6 @@
 //! Here the flag is set by a thread on a timer rather than by a key press, but
 //! it is the same flag and the same recorder.
 
-use lumberdaq::config::StorageFormat;
 use lumberdaq::daq::Daq;
 use lumberdaq::project::Project;
 use lumberdaq::storage::Recorder;
@@ -88,9 +87,6 @@ fn run() -> lumberdaq::Result<()> {
     for name in found.iter() {
         println!("    {}", name);
     }
-    match storage {
-        StorageFormat::Csv => println!("\nOne file per burst, since a CSV cannot say where one ends."),
-        StorageFormat::Sqlite => println!("\nOne database; its runs table tells the bursts apart."),
-    }
+    println!("\nOne database; its runs table tells the bursts apart.");
     Ok(())
 }

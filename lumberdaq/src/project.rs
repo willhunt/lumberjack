@@ -6,7 +6,6 @@ use crate::plot_config::PlotConfig;
 use crate::configuration::{ read_configuration_file, write_configuration_file };
 use crate::daq::Daq;
 use crate::storage::DataSink;
-use crate::storage_csv::CsvSink;
 use crate::storage_sqlite::SqliteSink;
 use std::path::{ Path, PathBuf };
 
@@ -16,8 +15,8 @@ use std::path::{ Path, PathBuf };
 /// my_project/
 ///     config.json       the setup: devices, channels, ports
 ///     plot_config.json  how somebody is looking at it, if anybody has said
-///     results.csv       the data
-///     results.json      the header describing that data
+///     results.db        every run ever recorded here
+///     export/           one csv per run, written by `lumberdaq export`
 /// ```
 ///
 /// The layout is separate from the setup because they are different things: a
@@ -52,17 +51,6 @@ impl Project {
 
     pub fn config_path(&self) -> PathBuf {
         self.directory.join("config.json")
-    }
-
-    pub fn results_path(&self) -> PathBuf {
-        self.directory.join("results.csv")
-    }
-
-    /// The sidecar describing what is in the results file.
-    ///
-    /// Only the csv sink needs this. A database keeps its own description.
-    pub fn header_path(&self) -> PathBuf {
-        self.directory.join("results.json")
     }
 
     pub fn database_path(&self) -> PathBuf {
@@ -145,9 +133,6 @@ impl Project {
     pub fn sink(&self, format: StorageFormat) -> Result<Box<dyn DataSink>> {
         Ok(match format {
             StorageFormat::Sqlite => Box::new(SqliteSink::new(&self.database_path())?),
-            StorageFormat::Csv => {
-                Box::new(CsvSink::new(&self.results_path(), &self.header_path())?)
-            }
         })
     }
 
@@ -158,12 +143,9 @@ impl Project {
     /// recording is given a file of its own named by `label`, along with the
     /// sidecar describing it.
     pub fn sink_for(&self, format: StorageFormat, label: &str) -> Result<Box<dyn DataSink>> {
+        let _ = label;
         Ok(match format {
             StorageFormat::Sqlite => Box::new(SqliteSink::new(&self.database_path())?),
-            StorageFormat::Csv => Box::new(CsvSink::new(
-                &self.directory.join(format!("results-{}.csv", label)),
-                &self.directory.join(format!("results-{}.json", label)),
-            )?),
         })
     }
 
@@ -180,14 +162,14 @@ mod tests {
     fn paths_are_derived_from_the_directory() {
         let project = Project::new("some/where");
         assert_eq!(project.config_path(), PathBuf::from("some/where/config.json"));
-        assert_eq!(project.results_path(), PathBuf::from("some/where/results.csv"));
-        assert_eq!(project.header_path(), PathBuf::from("some/where/results.json"));
+        assert_eq!(project.database_path(), PathBuf::from("some/where/results.db"));
+        assert_eq!(project.export_path(), PathBuf::from("some/where/export"));
     }
 
     #[test]
     fn moving_the_directory_moves_every_path() {
         let moved = Project::new("elsewhere");
         assert_eq!(moved.config_path(), PathBuf::from("elsewhere/config.json"));
-        assert_eq!(moved.results_path(), PathBuf::from("elsewhere/results.csv"));
+        assert_eq!(moved.database_path(), PathBuf::from("elsewhere/results.db"));
     }
 }

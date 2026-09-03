@@ -15,7 +15,6 @@ pub mod plot_config;
 pub mod project;
 pub mod session;
 pub mod storage;
-pub mod storage_csv;
 pub mod storage_sqlite;
 
 /// Build the system described by a project directory, ready to connect.

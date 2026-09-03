@@ -51,11 +51,14 @@ pub fn default_read_interval_ms() -> u64 {
 #[serde(rename_all = "lowercase")]
 pub enum StorageFormat {
     /// One file holding the setup and every run, queryable while recording.
+    ///
+    /// The only one there is. Recording to csv was dropped once `lumberdaq
+    /// export` could write one per run from the database, which does the same
+    /// job without a second sink to keep in step. The enum stays because the
+    /// choice is a property of a project directory and because a format that
+    /// cannot hold several runs would need saying.
     #[default]
     Sqlite,
-    /// Long format csv plus a json sidecar. Readable by anything, and a run
-    /// that dies halfway still leaves a usable file.
-    Csv,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -100,9 +100,8 @@ watched still holds nothing but its `config.json`. The results file is created
 when recording starts, not when the display opens.
 
 Stopping and starting again gives a second recording rather than more of the
-first. What that means depends on the format the project asks for: a database
-keeps both in the one file and its runs table tells them apart, while CSV gets
-a file of its own each time, named for when it started.
+first: both go in the one database and its runs table tells them apart.
+`lumberdaq export` writes each out as its own CSV, named for when it started.
 
 Devices keep reading whether or not anything is being recorded, so the readings
 and the plots carry on regardless.

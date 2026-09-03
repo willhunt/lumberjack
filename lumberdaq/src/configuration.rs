@@ -1,6 +1,5 @@
 use crate::{ Error, Result };
 use crate::config::DaqConfig;
-use crate::storage_csv::check_file_extension;
 use std::fs::File;
 use std::io::{ Read, Write }; // ErrorKind
 // use std::io::BufReader;
@@ -117,4 +116,20 @@ mod tests {
         // The detail is a cause rather than part of the message.
         assert!(std::error::Error::source(&error).is_some());
     }
+}
+
+/// Refuse a path that is not the kind of file being asked for.
+///
+/// Lived with the csv sink until that was dropped. It is about configuration
+/// files, which is here.
+fn check_file_extension(path: &std::path::PathBuf, extension: &OsStr) -> Result<()> {
+    if path.extension() != Some(extension) {
+        let error_msg = format!(
+            "Incorrect path extension. The extension must be {:?} but {:?} was provided.",
+            &extension,
+            &path.extension()
+        );
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error_msg).into());
+    }
+    Ok(())
 }

@@ -164,10 +164,15 @@ A run has one sink, so recording to two places is a sink that is itself two:
 ```rust
 daq.set_sink(Box::new(
     Fanout::new()
-        .and("sqlite", project.sink(StorageFormat::Sqlite)?)
-        .and("csv", project.sink(StorageFormat::Csv)?),
+        .and("database", project.sink(StorageFormat::Sqlite)?)
+        .and("copy", Box::new(SqliteSink::new(&elsewhere)?)),
 ))?;
 ```
+
+Worth doing when a run matters and the disk it is going to might not come back:
+a rig in a test cell writing to a network share as well as to itself. It is
+also how a live display attaches — choptui is a sink alongside the file being
+written.
 
 `Fanout` is a `DataSink` like any other, so nothing in `Daq` knows the
 difference. Every sink is offered each batch even if an earlier one fails, so a
@@ -198,10 +203,9 @@ daq.set_sink(Box::new(Recorder::new(
 The sink underneath is built when recording starts rather than up front, so a
 session that is only being watched leaves no results file behind at all. It is
 built afresh each time, so stopping and starting gives a second recording rather
-than more of the first. `Project::sink_for` decides what that means per format:
-a database keeps every run in the one file and its runs table tells them apart,
-while a CSV gets a file of its own each time, since nothing in a CSV can say
-where one recording ends and the next begins.
+than more of the first. A database keeps every run in the one file and its runs
+table tells them apart. `Project::sink_for` takes a label for a format that
+could not do that and would need a file of its own; SQLite ignores it.
 
 Devices keep reading throughout. What is not recorded is still acquired, which
 is what lets a display show live readings before anyone has pressed anything.
@@ -215,20 +219,23 @@ cargo run --example record_in_bursts -- test_projects/scaled
 ```
 my_project/
     config.json      the setup: devices, channels, sample rates, storage format
-    results.db       sqlite results, if storage is "sqlite"
-    results.csv      csv results, if storage is "csv"
-    results.json     the sidecar describing results.csv
+    results.db       every run ever recorded here
+    plot_config.json how a display lays those channels out, if one has saved it
+    export/          one csv per run, written by `lumberdaq export`
 ```
 
-Results files are gitignored; `config.json` is not.
+Results and exports are gitignored; `config.json` is not.
 
 `config.json` names its own storage format, so a project cannot be run one way
 today and another tomorrow and end up with half its data in each.
 
 | `"storage"` | |
 |---|---|
-| `"sqlite"` | Default. One file holding the setup and every run. Readable while recording, so a plot can watch a run in progress. Recording again appends a run rather than overwriting. |
-| `"csv"` | Long format, plus a json sidecar. Readable by anything, and a run that dies halfway still leaves a usable file. Recording again **overwrites**. |
+| `"sqlite"` | The only one, and the default. One file holding the setup and every run. Readable while recording, so a plot can watch a run in progress. Recording again appends a run rather than overwriting. |
+
+Recording straight to CSV was dropped once `export` could write one file per run
+from the database. It did the same job as a second sink to keep in step, could
+not hold more than one run, and had a sidecar to keep in step as well.
 
 Each device is read on its own thread, so a slow device does not hold up a fast
 one.
