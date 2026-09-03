@@ -99,18 +99,24 @@ impl Terminal {
     }
 }
 
-/// How far apart the two halves of a differential pair are.
+/// How far apart the two halves of a differential pair are, on a device with
+/// `inputs` single ended analog inputs.
 ///
-/// NI pairs a channel with the one four above it, unlike Pico which pairs with
-/// the one immediately above. Confirmed against a USB-6001 by
-/// `examples/probe_terminals.rs`: ai0 to ai3 accept differential and ai4 to ai7
-/// are refused, the driver naming `DAQmx_Val_RSE` as the only value it would
-/// take for those.
-pub const DIFFERENTIAL_OFFSET: u32 = 4;
-
-/// Which input a differential measurement is taken against.
-pub fn differential_partner(channel: u32) -> u32 {
-    channel + DIFFERENTIAL_OFFSET
+/// NI pairs a channel with the one half the input count above it, unlike Pico
+/// which pairs with the one immediately above. So the top half of the inputs
+/// are the partners and cannot start a pair of their own.
+///
+/// Confirmed against a USB-6001 by `examples/probe_terminals.rs`: with eight
+/// inputs the offset is four, ai0 to ai3 accept differential and ai4 to ai7 are
+/// refused, the driver naming `DAQmx_Val_RSE` as the only value it would take
+/// for those. The rule is written in terms of the count rather than as that
+/// four, because a sixteen input device pairs ai0 with ai8, and a constant
+/// four would quietly pair it with the wrong input instead of refusing.
+///
+/// Only the 6001 has been measured. Everything wider is this rule believed
+/// rather than seen, which is still better than a number known to be wrong.
+pub fn differential_partner(channel: u32, inputs: usize) -> u32 {
+    channel + (inputs / 2) as u32
 }
 
 /// Whether a channel can start a differential pair, on a device with `inputs`
@@ -119,7 +125,7 @@ pub fn differential_partner(channel: u32) -> u32 {
 /// Worth answering without the hardware, so that a setup can be checked from a
 /// desk rather than finding out on the first reading of a run.
 pub fn can_be_differential(channel: u32, inputs: usize) -> bool {
-    (differential_partner(channel) as usize) < inputs
+    (differential_partner(channel, inputs) as usize) < inputs
 }
 
 /// Fail unless the loaded library exports everything called here.
@@ -433,11 +439,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_differential_pair_is_four_apart() {
+    fn a_differential_pair_is_half_the_inputs_apart() {
         // Not one apart, which is how a Pico pairs them. The config surface
         // looks the same for both and the arithmetic cannot be shared.
-        assert_eq!(differential_partner(0), 4);
-        assert_eq!(differential_partner(3), 7);
+        //
+        // Four on the eight input USB-6001 this was measured against.
+        assert_eq!(differential_partner(0, 8), 4);
+        assert_eq!(differential_partner(3, 8), 7);
+    }
+
+    /// The reason the offset is not the constant four it used to be: a wider
+    /// device pairs further apart, and four would have named a real input that
+    /// is not the partner - measuring against the wrong wire rather than
+    /// refusing.
+    #[test]
+    fn a_wider_device_pairs_further_apart() {
+        assert_eq!(differential_partner(0, 16), 8);
+        assert_eq!(differential_partner(7, 16), 15);
+
+        assert!(can_be_differential(7, 16), "ai7 pairs with ai15 on a sixteen input device");
+        assert!(!can_be_differential(8, 16), "ai8 is itself a partner");
     }
 
     #[test]
