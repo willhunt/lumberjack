@@ -3,7 +3,6 @@
     "name": "Mixed rates",
     "author": "-"
   },
-  "storage": "sqlite",
   "devices": [
     {
       "info": {

@@ -3,7 +3,6 @@
     "name": "Mock sine",
     "author": "Will Hunt"
   },
-  "storage": "sqlite",
   "devices": [
     {
       "info": {

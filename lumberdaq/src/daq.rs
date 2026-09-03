@@ -1,6 +1,6 @@
 use crate::{ Error, Result };
 use crate::calculated::{ Calculator, ChannelRef };
-use crate::config::{ DaqConfig, DeviceConfig, StorageFormat };
+use crate::config::{ DaqConfig, DeviceConfig };
 use crate::device::Device;
 use crate::session::{ run_device, DeviceEvent, DeviceMessage };
 use crate::storage::DataSink;
@@ -36,9 +36,6 @@ impl ConnectionReport {
 /// get something that is.
 pub struct Daq {
     pub info: DaqInfo,
-    /// Which format this setup records in. Carried so it survives a round trip
-    /// through `config()`; attaching the matching sink is `Project`'s job.
-    pub storage: StorageFormat,
     pub devices: Vec<Device>,
     /// Channels worked out from the measured ones.
     ///
@@ -76,7 +73,6 @@ impl Daq {
             devices.push(Device::from_config(device_config)?);
         }
         let mut daq = Daq::new(config.info.name, config.info.author, devices)?;
-        daq.storage = config.storage;
 
         if let Some(calculated) = config.calculated {
             let calculator = Calculator::with_rates(calculated, &declared)?;
@@ -105,7 +101,6 @@ impl Daq {
     pub fn config(&self) -> DaqConfig {
         DaqConfig {
             info: self.info.clone(),
-            storage: self.storage,
             calculated: self.calculated.as_ref().map(|calc| calc.config()),
             devices: self.devices.iter().map(|device| device.config()).collect::<Vec<DeviceConfig>>(),
         }
@@ -117,7 +112,6 @@ impl Daq {
                 name: name,
                 author: author,
             },
-            storage: StorageFormat::default(),
             devices: vec![],
             calculated: None,
             sink: None,

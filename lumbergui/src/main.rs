@@ -110,7 +110,6 @@ const SAVE_DELAY: Duration = Duration::from_secs(1);
 fn empty_config() -> DaqConfig {
     DaqConfig {
         info: lumberdaq::daq::DaqInfo { name: String::new(), author: String::new() },
-        storage: lumberdaq::config::StorageFormat::default(),
         devices: Vec::new(),
         calculated: None,
     }
@@ -249,7 +248,6 @@ fn start_acquisition(config: DaqConfig, directory: PathBuf) -> Acquisition {
     let recording_in_thread = Arc::clone(&recording);
     // Read before the config is handed over, so the recorder knows what format
     // to write when somebody eventually asks it to.
-    let storage = config.storage;
 
     let thread = thread::spawn(move || {
         let report = |text: String| {
@@ -267,11 +265,10 @@ fn start_acquisition(config: DaqConfig, directory: PathBuf) -> Acquisition {
         let recorder = Recorder::new(
             recording_in_thread,
             Box::new(move || {
-                // Labelled by when it started, which a CSV needs to get a file
-                // of its own. A database keeps every run in the one file and
-                // tells them apart by its own runs table, so it ignores this.
-                let label = Utc::now().format("%Y%m%d-%H%M%S").to_string();
-                Project::new(&directory).sink_for(storage, &label)
+                // Every recording goes in the one database and its runs table
+                // tells them apart, so starting again needs nothing said about
+                // where it should go.
+                Project::new(&directory).sink()
             }),
         );
 

@@ -50,13 +50,12 @@ pub trait DataSink {
 ///
 /// ```no_run
 /// use lumberdaq::storage::Fanout;
-/// # use lumberdaq::config::StorageFormat;
 /// # use lumberdaq::storage_sqlite::SqliteSink;
 /// # use std::path::PathBuf;
 /// # let project = lumberdaq::project::Project::new("my_project");
 /// # let mut daq = lumberdaq::open("my_project")?;
 /// let sink = Fanout::new()
-///     .and("database", project.sink(StorageFormat::Sqlite)?)
+///     .and("database", project.sink()?)
 ///     .and("copy", Box::new(SqliteSink::new(&PathBuf::from("elsewhere.db"))?));
 /// daq.set_sink(Box::new(sink))?;
 /// # Ok::<(), lumberdaq::Error>(())
@@ -155,14 +154,13 @@ impl DataSink for Fanout {
 ///
 /// ```no_run
 /// use lumberdaq::storage::Recorder;
-/// # use lumberdaq::config::StorageFormat;
 /// # use std::sync::atomic::AtomicBool;
 /// # use std::sync::Arc;
 /// let recording = Arc::new(AtomicBool::new(false));
 /// let project = lumberdaq::project::Project::new("my_project");
 /// let recorder = Recorder::new(
 ///     Arc::clone(&recording),
-///     Box::new(move || project.sink_for(StorageFormat::Sqlite, "first")),
+///     Box::new(move || project.sink()),
 /// );
 /// ```
 pub struct Recorder {

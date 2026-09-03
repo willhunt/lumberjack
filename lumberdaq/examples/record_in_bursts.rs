@@ -37,20 +37,16 @@ fn run() -> lumberdaq::Result<()> {
 
     let project = Project::new(&directory);
     let config = project.read_config()?;
-    let storage = config.storage;
     let mut daq = Daq::from_config(config)?;
 
     let recording = Arc::new(AtomicBool::new(false));
     let sinks = Project::new(&directory);
-    let mut burst = 0;
     daq.set_sink(Box::new(Recorder::new(
         Arc::clone(&recording),
-        Box::new(move || {
-            burst += 1;
-            // Numbered rather than timestamped only so this prints something
-            // predictable. A real caller would name it for the time.
-            sinks.sink_for(storage, &format!("burst{}", burst))
-        }),
+        // A fresh sink each time recording starts. Every burst goes into the
+        // one database as a run of its own, so there is nothing to say about
+        // where each should live.
+        Box::new(move || sinks.sink()),
     )))?;
 
     let report = daq.connect();

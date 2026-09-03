@@ -115,12 +115,11 @@ fn run() -> Result<()> {
     // us. There is one to attach here and it is not that one.
     let project = Project::new(&directory);
     let config = project.read_config()?;
-    let storage = config.storage;
     let mut daq = Daq::from_config(config)?;
 
     daq.set_sink(Box::new(
         Fanout::new()
-            .and("database", project.sink(storage)?)
+            .and("database", project.sink()?)
             .and(
                 "alarm",
                 Box::new(Alarm {

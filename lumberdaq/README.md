@@ -222,16 +222,15 @@ instead and writes only while a flag is set:
 let recording = Arc::new(AtomicBool::new(false));
 daq.set_sink(Box::new(Recorder::new(
     Arc::clone(&recording),
-    Box::new(move || project.sink_for(storage, &label())),
+    Box::new(move || project.sink()),
 )))?;
 ```
 
 The sink underneath is built when recording starts rather than up front, so a
 session that is only being watched leaves no results file behind at all. It is
 built afresh each time, so stopping and starting gives a second recording rather
-than more of the first. A database keeps every run in the one file and its runs
-table tells them apart. `Project::sink_for` takes a label for a format that
-could not do that and would need a file of its own; SQLite ignores it.
+than more of the first. Both go into the one database and its runs table tells
+them apart, so starting again needs nothing said about where it should go.
 
 Devices keep reading throughout. What is not recorded is still acquired, which
 is what lets a display show live readings before anyone has pressed anything.
@@ -244,7 +243,7 @@ cargo run --example record_in_bursts -- test_projects/scaled
 
 ```
 my_project/
-    config.json      the setup: devices, channels, sample rates, storage format
+    config.json      the setup: devices, channels, sample rates
     results.db       every run ever recorded here
     plot_config.json how a display lays those channels out, if one has saved it
     export/          one csv per run, written by `lumberdaq export`
@@ -252,16 +251,14 @@ my_project/
 
 Results and exports are gitignored; `config.json` is not.
 
-`config.json` names its own storage format, so a project cannot be run one way
-today and another tomorrow and end up with half its data in each.
+`results.db` holds the setup and every run ever recorded there. It is readable
+while recording, so a plot can watch a run in progress, and recording again adds
+a run rather than overwriting. `lumberdaq export` writes each run out as a CSV
+when something else needs to read it.
 
-| `"storage"` | |
-|---|---|
-| `"sqlite"` | The only one, and the default. One file holding the setup and every run. Readable while recording, so a plot can watch a run in progress. Recording again appends a run rather than overwriting. |
-
-Recording straight to CSV was dropped once `export` could write one file per run
-from the database. It did the same job as a second sink to keep in step, could
-not hold more than one run, and had a sidecar to keep in step as well.
+There is nothing to choose: recording straight to CSV was dropped once `export`
+could do the same job from the database, and the `"storage"` setting went with
+it. An older config still naming one loads unchanged — the field is ignored.
 
 Each device is read on its own thread, so a slow device does not hold up a fast
 one.

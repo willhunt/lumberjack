@@ -3,7 +3,6 @@
     "name": "Twin devices",
     "author": "-"
   },
-  "storage": "sqlite",
   "devices": [
     {
       "info": {

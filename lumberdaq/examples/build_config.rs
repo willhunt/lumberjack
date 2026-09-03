@@ -8,7 +8,6 @@
 //!
 //!     cargo run -- test_projects/simulated_devices
 
-use lumberdaq::config::StorageFormat;
 use lumberdaq::daq::Daq;
 use lumberdaq::hardware::{ mock_hardware, serial_stream };
 use lumberdaq::project::Project;
@@ -55,7 +54,6 @@ fn main() -> Result<()> {
     )?;
 
     let mut config = daq.config();
-    config.storage = StorageFormat::Sqlite;
     project.write_config(&config)?;
 
     println!("Wrote {}", project.config_path().display());

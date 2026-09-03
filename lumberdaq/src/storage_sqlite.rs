@@ -291,7 +291,6 @@ mod tests {
     fn config_on_port(port: &str, index: i64) -> DaqConfig {
         DaqConfig {
             info: DaqInfo { name: "Test".to_string(), author: "Nobody".to_string() },
-            storage: crate::config::StorageFormat::Sqlite,
             calculated: None,
             devices: vec![DeviceConfig {
                 info: DeviceInfo {

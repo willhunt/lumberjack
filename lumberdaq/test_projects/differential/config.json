@@ -3,7 +3,6 @@
     "name": "Differential",
     "author": "-"
   },
-  "storage": "sqlite",
   "devices": [
     {
       "info": {

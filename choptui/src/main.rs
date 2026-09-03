@@ -56,9 +56,6 @@ fn run() -> lumberdaq::Result<()> {
         Ok(None) => {}
         Err(problem) => state.note(problem),
     }
-    // Read before the config is handed over, so the recorder knows what format
-    // to write when somebody eventually asks it to.
-    let storage = config.storage;
     let mut daq = Daq::from_config(config)?;
 
     let (updates, from_run) = mpsc::channel::<Update>();
@@ -75,15 +72,10 @@ fn run() -> lumberdaq::Result<()> {
                 "recording",
                 Box::new(Recorder::new(
                     Arc::clone(&recording),
-                    // Named for when it started. A database ignores the label
-                    // and keeps its runs in the one file; a CSV gets a file of
-                    // its own each time, which is what stopping and starting
-                    // has to mean when a format cannot say where one recording
-                    // ends and the next begins.
-                    Box::new(move || {
-                        let label = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-                        sinks.sink_for(storage, &label)
-                    }),
+                    // Every recording goes in the one database and its runs
+                    // table tells them apart, so starting again needs nothing
+                    // said about where it should go.
+                    Box::new(move || sinks.sink()),
                 )),
             ),
     ))?;

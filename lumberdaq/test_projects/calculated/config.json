@@ -3,7 +3,6 @@
     "name": "Calculated channels",
     "author": "Will Hunt"
   },
-  "storage": "sqlite",
   "devices": [
     {
       "info": {

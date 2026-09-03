@@ -1,7 +1,7 @@
 use crate::{ Error, Result };
 use crate::calculated::ChannelRef;
 use crate::check::{ check_config, CheckReport };
-use crate::config::{ DaqConfig, StorageFormat };
+use crate::config::DaqConfig;
 use crate::plot_config::PlotConfig;
 use crate::configuration::{ read_configuration_file, write_configuration_file };
 use crate::daq::Daq;
@@ -114,9 +114,8 @@ impl Project {
     /// and wants events while it is going.
     pub fn open(&self) -> Result<Daq> {
         let config = self.read_config()?;
-        let storage = config.storage;
         let mut daq = Daq::from_config(config)?;
-        daq.set_sink(self.sink(storage)?)?;
+        daq.set_sink(self.sink()?)?;
         Ok(daq)
     }
 
@@ -129,24 +128,13 @@ impl Project {
         Ok(check_config(self.read_config()?))
     }
 
-    /// The sink this project records to, per its config.
-    pub fn sink(&self, format: StorageFormat) -> Result<Box<dyn DataSink>> {
-        Ok(match format {
-            StorageFormat::Sqlite => Box::new(SqliteSink::new(&self.database_path())?),
-        })
-    }
-
-    /// A sink for one recording among several in a session.
+    /// The sink this project records to.
     ///
-    /// A database keeps every run in the one file and its runs table tells them
-    /// apart, so the path does not change. A CSV has no such thing, so each
-    /// recording is given a file of its own named by `label`, along with the
-    /// sidecar describing it.
-    pub fn sink_for(&self, format: StorageFormat, label: &str) -> Result<Box<dyn DataSink>> {
-        let _ = label;
-        Ok(match format {
-            StorageFormat::Sqlite => Box::new(SqliteSink::new(&self.database_path())?),
-        })
+    /// One database holding every run, so there is nothing to choose between
+    /// and nothing to name: recording again adds a run rather than wanting a
+    /// file of its own.
+    pub fn sink(&self) -> Result<Box<dyn DataSink>> {
+        Ok(Box::new(SqliteSink::new(&self.database_path())?))
     }
 
     pub fn write_config(&self, config: &DaqConfig) -> Result<()> {

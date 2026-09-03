@@ -3,7 +3,6 @@
     "name": "ADC-20 check",
     "author": "Will Hunt"
   },
-  "storage": "sqlite",
   "devices": [
     {
       "info": {

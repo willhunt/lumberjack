@@ -42,30 +42,9 @@ pub fn default_read_interval_ms() -> u64 {
     100
 }
 
-/// Where a project records its results.
-///
-/// Part of the setup rather than something the caller chooses, so a project
-/// directory says what it is. Otherwise the same directory could be run two
-/// ways and end up with half the data in each format.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum StorageFormat {
-    /// One file holding the setup and every run, queryable while recording.
-    ///
-    /// The only one there is. Recording to csv was dropped once `lumberdaq
-    /// export` could write one per run from the database, which does the same
-    /// job without a second sink to keep in step. The enum stays because the
-    /// choice is a property of a project directory and because a format that
-    /// cannot hold several runs would need saying.
-    #[default]
-    Sqlite,
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DaqConfig {
     pub info: DaqInfo,
-    #[serde(default)]
-    pub storage: StorageFormat,
     pub devices: Vec<DeviceConfig>,
     /// Channels worked out from measured ones rather than read from hardware.
     ///
