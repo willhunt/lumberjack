@@ -7,18 +7,18 @@
   "devices": [
     {
       "info": {
-        "name": "Slow 1Hz",
-        "description": "-"
+        "name": "Slow 1Hz"
       },
       "read_interval_ms": 1000,
       "hardware": {
         "type": "MockHardware",
-        "description": "-",
+        "acquisition": {
+          "mode": "polled"
+        },
         "channels": [
           {
             "name": "Value",
             "unit": "-",
-            "description": "-",
             "input": {
               "Sine": {
                 "frequency_hz": 0.2
@@ -30,18 +30,18 @@
     },
     {
       "info": {
-        "name": "Fast 10Hz",
-        "description": "-"
+        "name": "Fast 10Hz"
       },
       "read_interval_ms": 100,
       "hardware": {
         "type": "MockHardware",
-        "description": "-",
+        "acquisition": {
+          "mode": "polled"
+        },
         "channels": [
           {
             "name": "Value",
             "unit": "-",
-            "description": "-",
             "input": {
               "Sine": {
                 "frequency_hz": 0.2

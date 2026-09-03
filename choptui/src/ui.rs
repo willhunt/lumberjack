@@ -6,7 +6,7 @@
 //! that takes a moment does not delay a write to disk.
 
 use crate::monitor::Update;
-use crate::plot_config::{ self, Plot, PlotConfig };
+use lumberdaq::plot_config::{ self, Plot, PlotConfig };
 use lumberdaq::calculated::ChannelRef;
 use lumberdaq::config::DaqConfig;
 use lumberdaq::datapoint::DataPoint;
@@ -138,6 +138,12 @@ pub struct State {
     /// changed from here, but any value loads, so a layout written elsewhere is
     /// honoured as it was written.
     pub history_seconds: u64,
+    /// How a graphical interface arranged these plots, if one has.
+    ///
+    /// Kept and written back untouched. This monitor draws plots one under
+    /// another and has no use for it, but saving here must not throw away
+    /// somebody's arrangement just because this program cannot show it.
+    pub plot_layout: Option<lumberdaq::plot_config::PlotLayout>,
     /// Which row the Settings tab is pointing at.
     pub setting: usize,
     /// When the current recording started, and nothing when not recording.
@@ -179,6 +185,7 @@ impl State {
             tab: 0,
             selected: 0,
             history_seconds: HISTORY_DEFAULT,
+            plot_layout: None,
             setting: 0,
             recording: None,
         }
@@ -285,9 +292,12 @@ impl State {
         PlotConfig {
             version: plot_config::VERSION,
             history_seconds: self.history_seconds,
+            layout: self.plot_layout.clone(),
             plots: plots
                 .into_iter()
-                .map(|(number, channels)| Plot { number: number, channels: channels })
+                // No name: the terminal monitor identifies plots by number and
+                // has nowhere to type one.
+                .map(|(number, channels)| Plot { number, name: None, channels })
                 .collect(),
         }
     }
@@ -300,6 +310,7 @@ impl State {
     /// saved with a device attached is worth keeping for when it is again.
     pub fn apply_plot_config(&mut self, saved: PlotConfig) {
         self.history_seconds = saved.history_seconds;
+        self.plot_layout = saved.layout;
         for plot in saved.plots.iter() {
             for reference in plot.channels.iter() {
                 match self.channel_mut(&reference.device, &reference.channel) {
@@ -1136,6 +1147,7 @@ mod tests {
             tab: 0,
             selected: 0,
             history_seconds: HISTORY_DEFAULT,
+            plot_layout: None,
             setting: 0,
             recording: None,
         }
@@ -1408,6 +1420,7 @@ mod tests {
         state.apply_plot_config(PlotConfig {
             version: 1,
             history_seconds: 45,
+            layout: None,
             plots: vec![],
         });
         assert_eq!(state.history_seconds, 45);
@@ -1444,8 +1457,10 @@ mod tests {
         state.apply_plot_config(PlotConfig {
             version: 1,
             history_seconds: 60,
+            layout: None,
             plots: vec![Plot {
                 number: 1,
+                name: None,
                 channels: vec![ChannelRef {
                     device: "Ghost".to_string(),
                     channel: "Nothing".to_string(),

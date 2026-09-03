@@ -105,7 +105,6 @@ pub struct ChannelInfo {
     /// as it was given, since guessing a unit is worse than having none.
     #[serde(default)]
     pub unit: String,
-    pub description: String,
     /// How to turn the raw measurement into the unit named above.
     ///
     /// The measurement is written `x`. Either an equation on its own, or one
@@ -167,12 +166,11 @@ impl Channel {
     //     self.data.add_datapoints(&mut datapoints)?;
     //     Ok(())
     // }
-    pub fn new(name: String, unit: String, description: String) -> Channel {
+    pub fn new(name: String, unit: String) -> Channel {
         Channel {
             info: ChannelInfo {
                 name: name,
                 unit: unit,
-                description: description,
                 scale: None,
             },
             scale: None,
@@ -363,7 +361,6 @@ mod tests {
         ChannelInfo {
             name: "Flow".to_string(),
             unit: "L/min".to_string(),
-            description: "-".to_string(),
             scale: scale,
         }
     }

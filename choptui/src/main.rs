@@ -7,10 +7,10 @@
 //! to. Recording arrives with the button in the header.
 
 mod monitor;
-mod plot_config;
 mod ui;
 
 use lumberdaq::daq::Daq;
+use lumberdaq::plot_config;
 use lumberdaq::project::Project;
 use lumberdaq::storage::{ Fanout, Recorder };
 use monitor::{ Monitor, Update };

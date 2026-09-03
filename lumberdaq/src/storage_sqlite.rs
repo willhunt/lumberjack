@@ -48,7 +48,7 @@ pub struct SqliteSink {
 /// Stamped into the file so a database written by a different version of the
 /// schema is refused with an explanation rather than a raw SQL error about a
 /// missing column. Bump it whenever the tables change.
-const SCHEMA_VERSION: i32 = 5;
+const SCHEMA_VERSION: i32 = 6;
 
 impl SqliteSink {
     pub fn new(path: &Path) -> Result<SqliteSink> {
@@ -133,9 +133,8 @@ impl DataSink for SqliteSink {
                  run_id      INTEGER NOT NULL REFERENCES runs(id),
                  name        TEXT NOT NULL,
                  -- No description: a device has a name, and what the hardware
-                 -- is lives in the column below. The channels table keeps
-                 -- theirs, which says what a reading means rather than
-                 -- repeating what the device is called.
+                 -- is lives in the column below.
+                 --
                  -- The whole hardware configuration as json: port, baud rate,
                  -- frame pattern, channel bindings. Names alone cannot say
                  -- whether two runs measured the same thing; this can, and it
@@ -143,15 +142,15 @@ impl DataSink for SqliteSink {
                  hardware    TEXT NOT NULL,
                  UNIQUE(run_id, name)
              );
-             -- Enough to label a series. What each channel physically reads is
-             -- in devices.hardware, which holds the binding already; repeating
-             -- it here would be a second copy of the same fact.
+             -- Enough to label a series: what it is called and what its
+             -- numbers are in. What each channel physically reads is in
+             -- devices.hardware, which holds the binding already; repeating it
+             -- here would be a second copy of the same fact.
              CREATE TABLE IF NOT EXISTS channels (
                  id          INTEGER PRIMARY KEY,
                  device_id   INTEGER NOT NULL REFERENCES devices(id),
                  name        TEXT NOT NULL,
                  unit        TEXT NOT NULL,
-                 description TEXT NOT NULL,
                  UNIQUE(device_id, name)
              );
              CREATE TABLE IF NOT EXISTS readings (
@@ -186,14 +185,9 @@ impl DataSink for SqliteSink {
             let mut ids: HashMap<String, i64> = HashMap::new();
             for channel in device.hardware.channel_infos().iter() {
                 self.connection.execute(
-                    "INSERT INTO channels (device_id, name, unit, description)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![
-                        device_id,
-                        channel.name,
-                        channel.unit,
-                        channel.description
-                    ],
+                    "INSERT INTO channels (device_id, name, unit)
+                     VALUES (?1, ?2, ?3)",
+                    rusqlite::params![device_id, channel.name, channel.unit],
                 )?;
                 ids.insert(channel.name.clone(), self.connection.last_insert_rowid());
             }
@@ -217,14 +211,9 @@ impl DataSink for SqliteSink {
             let mut ids: HashMap<String, i64> = HashMap::new();
             for channel in calculated.channels.iter() {
                 self.connection.execute(
-                    "INSERT INTO channels (device_id, name, unit, description)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![
-                        device_id,
-                        channel.info.name,
-                        channel.info.unit,
-                        channel.info.description
-                    ],
+                    "INSERT INTO channels (device_id, name, unit)
+                     VALUES (?1, ?2, ?3)",
+                    rusqlite::params![device_id, channel.info.name, channel.info.unit],
                 )?;
                 ids.insert(channel.info.name.clone(), self.connection.last_insert_rowid());
             }
@@ -317,7 +306,6 @@ mod tests {
                         info: ChannelInfo {
                             name: "Pressure".to_string(),
                             unit: "Pa".to_string(),
-                            description: "-".to_string(),
                         scale: None,
                         },
                         index: index,

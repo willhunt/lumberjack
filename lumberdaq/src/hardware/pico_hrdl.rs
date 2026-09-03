@@ -373,7 +373,6 @@ pub fn create_device(name: String) -> Result<Device> {
 pub fn add_channel(
     device: &mut Device,
     name: String,
-    description: String,
     channel: u16,
     range: VoltageRange,
     single_ended: bool,
@@ -384,7 +383,6 @@ pub fn add_channel(
                 info: ChannelInfo {
                     name: name,
                     unit: "V".to_string(),
-                    description: description,
                 scale: None,
                 },
                 channel: channel,
@@ -415,7 +413,6 @@ mod tests {
                     info: ChannelInfo {
                         name: format!("Channel {}", index + 1),
                         unit: "V".to_string(),
-                        description: "-".to_string(),
                     scale: None,
                     },
                     channel: index as u16 + 1,
@@ -544,7 +541,6 @@ mod tests {
                     info: ChannelInfo {
                         name: format!("Channel {}", number),
                         unit: "V".to_string(),
-                        description: "-".to_string(),
                     scale: None,
                     },
                     channel: *number,

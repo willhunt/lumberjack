@@ -450,14 +450,13 @@ pub fn create_device(name: String, port: String, baudrate: u32) -> Result<Device
     Ok(Device::new(name, Hardware::SerialStream(hardware)))
 }
 
-pub fn add_channel(device: &mut Device, name: String, description: String, index: i64, unit: String) -> Result<()> {
+pub fn add_channel(device: &mut Device, name: String, index: i64, unit: String) -> Result<()> {
     match &mut device.hardware {
         Hardware::SerialStream(hardware) => {
             hardware.add_channel(SerialStreamChannel {
                 info: ChannelInfo {
                     name: name,
                     unit: unit,
-                    description: description,
                 scale: None,
                 },
                 index: index,
@@ -483,7 +482,6 @@ mod tests {
             info: ChannelInfo {
                 name: format!("Channel {}", index),
                 unit: "-".to_string(),
-                description: "-".to_string(),
             scale: None,
             },
             index: *index,

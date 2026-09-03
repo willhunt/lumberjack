@@ -285,7 +285,6 @@ mod tests {
             info: ChannelInfo {
                 name: format!("ai{}", number),
                 unit: "V".to_string(),
-                description: "-".to_string(),
                 scale: None,
             },
             channel: number,

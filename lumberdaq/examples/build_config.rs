@@ -34,14 +34,12 @@ fn main() -> Result<()> {
     serial_stream::add_channel(
         &mut serial,
         "Pressure".to_string(),
-        "Differential pressure sensor".to_string(),
         1,
         "Pa".to_string(),
     )?;
     serial_stream::add_channel(
         &mut serial,
         "Pump Activation".to_string(),
-        "Pump on (1) or off (0)".to_string(),
         3,
         "-".to_string(),
     )?;

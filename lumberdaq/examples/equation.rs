@@ -85,7 +85,6 @@ fn proposed(equation: &str, variable: &str, source: ChannelRef) -> CalculatedCha
         info: ChannelInfo {
             name: "Proposed".to_string(),
             unit: "-".to_string(),
-            description: "-".to_string(),
         scale: None,
         },
         inputs: inputs,

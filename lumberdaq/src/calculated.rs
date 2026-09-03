@@ -497,7 +497,6 @@ mod tests {
             info: ChannelInfo {
                 name: name.to_string(),
                 unit: "-".to_string(),
-                description: "-".to_string(),
             scale: None,
             },
             inputs: inputs
