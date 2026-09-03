@@ -13,3 +13,8 @@ results-*.json
 results.db
 results.db-wal
 results.db-shm
+
+# Files written by `lumberdaq export`. Derived from a results database, and
+# rewritten from it whenever one is missing, so there is nothing here that
+# recording did not already produce.
+export/
