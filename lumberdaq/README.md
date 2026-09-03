@@ -157,33 +157,59 @@ A worked example, in the shape a TUI or GUI would use:
 cargo run --example embed -- test_projects/simulated_and_serial_devices
 ```
 
-### Recording to more than one place
+### Doing more than one thing with the data
 
-A run has one sink, so recording to two places is a sink that is itself two:
+A run has one sink, so doing two things with what it reads means a sink that is
+itself two. `Fanout` is that, and it is a `DataSink` like any other, so nothing
+in `Daq` knows the difference.
+
+The pairing it exists for is one sink writing to disk and one doing something
+else. Implementing the something else is three methods, none of which has to
+write anything anywhere:
 
 ```rust
+impl DataSink for Alarm {
+    fn init(&mut self, _config: &DaqConfig) -> Result<()> { Ok(()) }
+
+    fn write_batch(&mut self, batch: &Batch) -> Result<()> {
+        if batch.channel != self.channel { return Ok(()); }
+        for point in batch.datapoints.iter() {
+            // ... notice what matters
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> { Ok(()) }
+}
+
 daq.set_sink(Box::new(
     Fanout::new()
-        .and("database", project.sink(StorageFormat::Sqlite)?)
-        .and("copy", Box::new(SqliteSink::new(&elsewhere)?)),
+        .and("database", project.sink(storage)?)
+        .and("alarm", Box::new(alarm)),
 ))?;
 ```
 
-Worth doing when a run matters and the disk it is going to might not come back:
-a rig in a test cell writing to a network share as well as to itself. It is
-also how a live display attaches — choptui is a sink alongside the file being
-written.
+Every sink is offered every batch, so one that cares about a single channel says
+so itself; there is no subscribing. And because it sees the batches the recorder
+sees, it cannot disagree with what was written — an alarm fed by a second read
+of the hardware could say a limit was never crossed while the results file said
+it was.
 
-`Fanout` is a `DataSink` like any other, so nothing in `Daq` knows the
-difference. Every sink is offered each batch even if an earlier one fails, so a
-sink that has gone wrong cannot starve the others; the failure is reported
-afterwards and names all of them, since a full disk fails every sink at once.
+This is how a live display attaches. choptui's is a sink alongside the file
+being written, not a second path through the library.
 
-This is also how a live display attaches: it is a sink alongside the file it is
-being written to, not a second path through the library.
+Every sink is offered each batch even if an earlier one fails, so a sink that
+has gone wrong cannot starve the others; the failure is reported afterwards and
+names all of them, since a full disk fails every sink at once.
 
 ```cmd
-cargo run --example two_sinks -- test_projects/scaled
+cargo run --example alarm_while_recording -- test_projects/scaled Pressure 8
+```
+
+```
+  07:50:20.830  Pressure over 8 at 8.536  (crossing 1)
+  07:50:21.380  Pressure back under at 7.939
+  07:50:22.830  Pressure over 8 at 8.536  (crossing 2)
 ```
 
 ### Starting and stopping recording
