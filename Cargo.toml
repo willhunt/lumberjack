@@ -13,6 +13,7 @@ members = [
     "picolog",    # safe wrappers over the Pico driver, used by lumberdaq
     "nidaqmx",    # the same for National Instruments, for legacy USB-6001 hardware
     "choptui",    # terminal monitor, a separate crate on purpose
+    "lumbergui",  # iced GUI candidate, evaluated alongside egui and app/
 ]
 # Cargo insists every nested crate is either a member or excluded here.
 #

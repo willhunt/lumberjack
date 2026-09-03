@@ -1,0 +1,24 @@
+[package]
+name = "lumbergui"
+version = "0.1.0"
+edition = "2021"
+description = "iced-based GUI, evaluated as a candidate alongside egui and the app/ Tauri prototype"
+
+[dependencies]
+lumberdaq = { path = "../lumberdaq" }
+# Not a new crate in the tree: lumberdaq already uses it, and a DataPoint
+# carries a chrono timestamp, so anything plotting one has to name the type.
+chrono = "0.4"
+iced = "0.14"
+# The native folder picker. There is no answer to "choose a directory" in iced
+# or in std, and typing a path into a text field is the alternative. Used only
+# from the file menu, and only its blocking form: the dialog is modal, so the
+# window behind it is meant to be waiting anyway.
+rfd = "0.17"
+iced_fonts = { version = "0.3", features = ["lucide"] }
+iced_plot = "0.5"
+# Already compiled for lumberdaq, whose configs are JSON: the user settings
+# file is the same idea, so it uses the same tools rather than a hand-rolled
+# parser.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
