@@ -130,6 +130,9 @@ pub enum Error {
     #[error("the equation for '{channel}' has no inputs, so it can never be worked out")]
     EquationHasNoInput { channel: String },
 
+    #[error("the equation for '{channel}' is empty, so there is nothing to work out")]
+    EquationIsEmpty { channel: String },
+
     #[error("'{channel}' is an analog input, so it measures volts, but its unit says '{unit}'. Give it a scale to convert the reading, and the unit will be what the scale produces; leave the unit out and it will be volts")]
     UnitIsNotVolts { channel: String, unit: String },
 

@@ -439,6 +439,14 @@ fn channel_equation(config: &CalculatedDevice, name: &str) -> String {
 
 /// Compile one channel's equation and check it against its declared inputs.
 fn compile(channel: &CalculatedChannel) -> Result<Compiled> {
+    // Caught before evalexpr sees it. An empty equation is not a syntax error
+    // to it: it compiles to an empty tree, evaluates to nothing, and the
+    // complaint that comes back is about Rust types the person typing the
+    // equation has never heard of and cannot act on.
+    if channel.equation.trim().is_empty() {
+        return Err(Error::EquationIsEmpty { channel: channel.info.name.clone() });
+    }
+
     let expression = Expression::compile(&channel.equation).map_err(|reason| {
         Error::InvalidEquation {
             channel: channel.info.name.clone(),
@@ -747,7 +755,9 @@ mod tests {
     /// rather than being refused before it started.
     #[test]
     fn equations_that_only_fail_when_run_are_still_refused_at_build() {
-        for equation in ["v * * 2", "v +", "v $$ 2", "v 2", ""] {
+        // An empty one is refused too, but earlier and by name: see
+        // `an_empty_equation_says_so_in_plain_words`.
+        for equation in ["v * * 2", "v +", "v $$ 2", "v 2"] {
             let result = calculator(vec![channel("Bad", equation, &[("v", "D", "C")])]);
             assert!(
                 matches!(result, Err(Error::InvalidEquation { .. })),
@@ -770,6 +780,19 @@ mod tests {
             calculator(vec![channel("Bad", "v * offset", &[("v", "D", "C")])]).err().unwrap();
         assert!(matches!(error, Error::UnknownEquationInput { .. }));
         assert!(error.to_string().contains("offset"));
+    }
+
+    #[test]
+    fn an_empty_equation_says_so_in_plain_words() {
+        let problem = channel("B", "", &[("v", "Rig", "Flow")])
+            .validate()
+            .expect_err("an empty equation cannot be worked out");
+        let said = problem.to_string();
+
+        assert!(said.contains("empty"), "{}", said);
+        // evalexpr's own complaint names its Rust types, which means nothing
+        // to somebody who typed an equation into a box.
+        assert!(!said.contains("Value::"), "{}", said);
     }
 
     #[test]
