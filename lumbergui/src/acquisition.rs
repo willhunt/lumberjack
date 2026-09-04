@@ -159,11 +159,15 @@ pub(crate) fn start_acquisition(config: DaqConfig, directory: PathBuf) -> Acquis
                 connected: true,
             });
         }
-        for (device, _) in connected.failed.iter() {
+        for (device, cause) in connected.failed.iter() {
             let _ = sender.try_send(FromAcquisition::Connection {
                 device: device.clone(),
                 connected: false,
             });
+            // Why, and not merely that. A device that will not connect for
+            // want of a driver says so here, in the words the backend uses,
+            // which name the software to install.
+            report(format!("{} did not connect: {}", device, cause));
         }
 
         let outcome = daq.run(&stop_in_thread, &mut |event| {

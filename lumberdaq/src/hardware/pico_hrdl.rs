@@ -216,18 +216,19 @@ pub struct Unit {
 /// by a wide margin: it loads the driver and initialises the unit over USB,
 /// which takes long enough to be felt. Both answers come from the same string
 /// the unit returns, so asking twice meant paying that twice for one question.
-pub fn identify() -> Option<Unit> {
-    let unit = Hrdl::open().ok()?;
+pub fn identify() -> Result<Unit> {
+    // A `Result` rather than an `Option`, so that "there is no driver
+    // installed" and "there is no unit plugged in" can be told apart by
+    // whoever asked. Both look the same from here and mean quite different
+    // things to somebody trying to use the hardware.
+    let unit = Hrdl::open()?;
 
-    let variant = unit
-        .info(picolog::hrdl::Info::Variant)
-        .ok()
-        .filter(|variant| !variant.is_empty())?;
+    let variant = unit.info(picolog::hrdl::Info::Variant)?;
 
     // Cheap next to the open: the unit is already there to be asked.
     let inputs = unit.channel_count().ok();
 
-    Some(Unit { variant, inputs })
+    Ok(Unit { variant, inputs })
 }
 
 pub(crate) fn check_channels(config: &PicoHrdlConfig) -> Result<()> {

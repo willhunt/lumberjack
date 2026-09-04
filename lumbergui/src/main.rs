@@ -1151,7 +1151,7 @@ struct AppDaq {
     /// The fetch opens the unit over USB, which takes about a second, so it
     /// happens on a thread of its own and the answer arrives here rather than
     /// holding up the click that asked for it.
-    pico_probe: Option<Receiver<Option<u16>>>,
+    pico_probe: Option<Receiver<Result<Option<u16>, String>>>,
     /// What the selected device turned out to be — `USB-6001`, `ADC-24` —
     /// where the hardware could say. Never written to the config: it describes
     /// what is plugged in now, not what the project is.
@@ -2844,7 +2844,10 @@ impl AppDaq {
         thread::spawn(move || {
             // Nobody is left waiting if this fails: the receiver going away
             // means the interface moved on, which is allowed.
-            let _ = sender.send(pico_hrdl::identify().and_then(|unit| unit.inputs));
+            let found = pico_hrdl::identify()
+                .map(|unit| unit.inputs)
+                .map_err(|problem| problem.to_string());
+            let _ = sender.send(found);
         });
         self.pico_probe = Some(receiver);
     }
@@ -2854,15 +2857,22 @@ impl AppDaq {
         let Some(probe) = self.pico_probe.as_ref() else { return };
 
         match probe.try_recv() {
-            Ok(inputs) => {
+            Ok(found) => {
                 self.pico_probe = None;
-                self.pico_inputs = inputs;
-                match inputs {
-                    Some(inputs) => self.note(format!("the Pico unit has {} inputs", inputs)),
-                    None => self.note(
-                        "no Pico unit answered, so every channel the backend allows is offered"
+                self.pico_inputs = found.as_ref().ok().copied().flatten();
+
+                match found {
+                    Ok(Some(inputs)) => self.note(format!("the Pico unit has {} inputs", inputs)),
+                    Ok(None) => self.note(
+                        "the Pico unit did not say which model it is, so every channel the \
+                         backend allows is offered"
                             .to_string(),
                     ),
+                    // The backend's own words, which name the driver and where
+                    // to get it. Saying "no unit answered" instead would send
+                    // somebody looking at their cable when the software is
+                    // what is missing.
+                    Err(problem) => self.note(problem),
                 }
             }
             // Still working. `Disconnected` would mean the thread died without
