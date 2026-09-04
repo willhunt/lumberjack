@@ -21,8 +21,22 @@ iced = { version = "0.14", features = ["svg"] }
 rfd = "0.17"
 iced_fonts = { version = "0.3", features = ["lucide"] }
 iced_plot = "0.5"
+# Already in the tree: iced's `svg` feature builds it to draw the marks. Named
+# here as well so the window icon can be rasterised from the same logo the
+# interface draws, rather than keeping a second copy of it as a PNG that could
+# fall out of step. Default features off: the image formats it can decode are
+# for embedded bitmaps, which our marks do not have.
+resvg = { version = "0.45", default-features = false }
 # Already compiled for lumberdaq, whose configs are JSON: the user settings
 # file is the same idea, so it uses the same tools rather than a hand-rolled
 # parser.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# Only to give the executable its icon and its name in Explorer, which has to
+# be compiled into the binary before it runs. `resvg` again, so the icon is
+# rendered from the same logo the interface draws rather than from a second
+# copy kept beside it.
+[build-dependencies]
+resvg = { version = "0.45", default-features = false }
+winresource = "0.1"

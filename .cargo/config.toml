@@ -1,0 +1,15 @@
+# Link the C runtime into the binary rather than borrowing the machine's.
+#
+# Rust's standard library on the MSVC target uses Microsoft's C runtime for the
+# groundwork — allocating memory, copying bytes — and by default expects to
+# find it on the machine as `VCRUNTIME140.dll`. It usually is there, because
+# nearly everything installs it; when it is not, the program refuses to start
+# with a message nobody outside this repository could act on.
+#
+# Static linking makes the executable a little larger and entirely its own,
+# which is worth it for something handed to somebody else to run.
+#
+# It does nothing for the hardware drivers. Those are separate libraries loaded
+# while the program runs, and they bring whatever they need themselves.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

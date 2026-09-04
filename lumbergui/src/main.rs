@@ -421,12 +421,51 @@ fn seconds_since(reference: DateTime<Utc>, moment: DateTime<Utc>) -> f64 {
     (moment - reference).num_microseconds().unwrap_or(0) as f64 / 1_000_000.0
 }
 
+/// The logo, rasterised for the window's own icon.
+///
+/// Rendered from the SVG rather than from a PNG kept beside it: a second copy
+/// of a logo is a copy that goes stale, and resvg is already here to draw the
+/// marks in the title bar.
+///
+/// The full mark, drawn at 64 pixels. The plain one is for the sizes below
+/// that, and the file icon carries both — see `build.rs`.
+///
+/// `None` rather than an error if anything goes wrong. A window with the
+/// system's default icon is a window; refusing to open over it would not be.
+fn window_icon() -> Option<iced::window::Icon> {
+    const SIZE: u32 = 64;
+
+    let tree = resvg::usvg::Tree::from_data(LOGO, &resvg::usvg::Options::default()).ok()?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(SIZE, SIZE)?;
+
+    let scale = SIZE as f32 / tree.size().width();
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+
+    // tiny_skia paints in premultiplied alpha and an icon wants it straight,
+    // which shows on the notch's antialiased edge where alpha is partial.
+    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+    for pixel in pixmap.pixels() {
+        let colour = pixel.demultiply();
+        rgba.extend_from_slice(&[colour.red(), colour.green(), colour.blue(), colour.alpha()]);
+    }
+
+    iced::window::icon::from_rgba(rgba, SIZE, SIZE).ok()
+}
+
 pub fn main() -> iced::Result {
     iced::application(AppDaq::new, AppDaq::update, AppDaq::view)
-        // The size the design is drawn at, so a screenshot and the mockup can
-        // be laid over each other without either being scaled first. Only a
-        // starting size - the window is still resizable.
-        .window_size((1252.0, 839.0))
+        .window(window::Settings {
+            // The size the design is drawn at, so a screenshot and the mockup
+            // can be laid over each other without either being scaled first.
+            // Only a starting size - the window is still resizable.
+            size: iced::Size::new(1252.0, 839.0),
+            icon: window_icon(),
+            ..window::Settings::default()
+        })
         .subscription(AppDaq::subscription)
         .theme(AppDaq::theme)
         .scale_factor(AppDaq::scale_factor)
