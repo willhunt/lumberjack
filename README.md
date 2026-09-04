@@ -1,4 +1,11 @@
+<div align="center">
+
+<img src="assets/Lumberjack.svg" alt="" width="64">
+
 # Lumberjack
+
+</div>
+
 Work in progress. Do not use.
 
 Data aquisition software.
@@ -11,10 +18,10 @@ and one `Cargo.lock`.
 * `picolog/` — safe wrappers over the Pico Technology driver, used by lumberdaq.
 * `choptui/` — terminal monitor for a run. A separate crate on purpose: it can
   only reach lumberdaq's public API, so a missing export fails to compile here.
-* `app/` — an earlier Tauri + Svelte prototype. Does not use `lumberdaq` yet.
+* `lumbergui/` — the iced interface. The direction the GUI is taking.
 * `sandbox/` — throwaway experiments, kept out of the library's dependencies.
 
-The last two stand outside the workspace and keep their own dependencies.
+`sandbox/` stands outside the workspace and keeps its own dependencies.
 
 # Hardware
 Pico Technology and other open DAQ hardware, plus devices streaming over serial.

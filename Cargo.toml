@@ -13,14 +13,12 @@ members = [
     "picolog",    # safe wrappers over the Pico driver, used by lumberdaq
     "nidaqmx",    # the same for National Instruments, for legacy USB-6001 hardware
     "choptui",    # terminal monitor, a separate crate on purpose
-    "lumbergui",  # iced GUI candidate, evaluated alongside egui and app/
+    "lumbergui",  # the iced interface
 ]
 # Cargo insists every nested crate is either a member or excluded here.
 #
-# app/     the legacy Tauri prototype. Its own toolchain, not part of this.
 # sandbox/ one-off measurements, deliberately standing apart: storage_bench
 #          pins an older rusqlite, and joining would build bundled SQLite twice.
 exclude = [
-    "app",
     "sandbox",
 ]
