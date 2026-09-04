@@ -614,13 +614,29 @@ pub(crate) fn hint<'a>(control: impl Into<Element<'a, Message>>, tip: &'a str) -
 /// A free function for the same reason `transport` and `hint` are: `Tooltip`
 /// is invariant in its lifetime, so building one inside a method would tie the
 /// result to the borrow of `self`.
-pub(crate) fn explaining<'a>(control: Element<'a, Message>, message: String) -> Element<'a, Message> {
-    tooltip(
-        control,
-        container(text(message).size(13)).padding(6).max_width(320).style(error_tip_style),
-        tooltip::Position::Bottom,
-    )
-    .into()
+pub(crate) fn explaining<'a>(
+    control: Element<'a, Message>,
+    message: Option<String>,
+) -> Element<'a, Message> {
+    // Wrapped whether or not there is anything to say, and that is the whole
+    // point. iced knows a widget's state - a text field's focus and its caret
+    // among it - by where the widget sits in the tree and what it is. Wrapping
+    // a field only once it is wrong changes what sits at that position, so the
+    // keystroke that made it wrong threw the cursor out of the box, which made
+    // an equation nearly impossible to type.
+    //
+    // With nothing to say the bubble is an empty, unstyled space: it is still
+    // there, and it draws nothing.
+    let bubble: Element<'a, Message> = match message {
+        Some(message) => container(text(message).size(13))
+            .padding(6)
+            .max_width(320)
+            .style(error_tip_style)
+            .into(),
+        None => space::horizontal().width(0).into(),
+    };
+
+    tooltip(control, bubble, tooltip::Position::Bottom).into()
 }
 
 /// A label with its explanation behind it, rather than beneath it.

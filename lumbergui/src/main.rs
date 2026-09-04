@@ -4250,10 +4250,7 @@ impl AppDaq {
                 Some(explanation) => labelled(label, explanation),
                 None => field_label(label),
             },
-            match problem {
-                Some(problem) => explaining(field.into(), problem),
-                None => field.into(),
-            },
+            explaining(field.into(), problem),
         ]
         .spacing(2)
         .into()
