@@ -160,7 +160,11 @@ impl PlotConfig {
     ///
     /// Empty means every plot names something real.
     pub fn dangling(&self, config: &DaqConfig) -> Vec<ChannelRef> {
-        let known = config.available_inputs();
+        // Every channel, not only the measured ones: a plot drawing a
+        // calculated channel is naming something real, and checking against
+        // the equation-input list would call it dangling and offer to remove
+        // the very thing the rig was set up to show.
+        let known = config.all_channels();
         self.plots
             .iter()
             .flat_map(|plot| plot.channels.iter())
@@ -222,6 +226,57 @@ mod tests {
             }"#,
         )
         .expect("test rig should parse")
+    }
+
+    /// The same rig with a calculated channel on top of it.
+    fn rig_with_calculated() -> DaqConfig {
+        serde_json::from_str(
+            r#"{
+              "info": { "name": "Test", "author": "-" },
+              "devices": [{
+                "info": { "name": "Rig" },
+                "hardware": {
+                  "type": "MockHardware",
+                  "channels": [
+                    { "name": "Flow", "unit": "L/min", "input": "Random" },
+                    { "name": "Pressure", "unit": "bar", "input": "Random" }
+                  ]
+                }
+              }],
+              "calculated": {
+                "info": { "name": "Derived" },
+                "channels": [{
+                  "name": "Power",
+                  "unit": "W",
+                  "inputs": { "f": { "device": "Rig", "channel": "Flow" } },
+                  "equation": "f * 2"
+                }]
+              }
+            }"#,
+        )
+        .expect("test rig should parse")
+    }
+
+    #[test]
+    fn a_plot_of_a_calculated_channel_is_not_dangling() {
+        let layout = layout(vec![("Derived", "Power")]);
+        assert!(
+            layout.dangling(&rig_with_calculated()).is_empty(),
+            "a calculated channel is a real channel to plot"
+        );
+    }
+
+    #[test]
+    fn a_calculated_channel_is_not_offered_as_an_equation_input() {
+        let config = rig_with_calculated();
+        let inputs = config.available_inputs();
+
+        assert!(
+            !inputs.iter().any(|input| input.device == "Derived"),
+            "one calculated channel cannot feed another, so it is not an input"
+        );
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(config.all_channels().len(), 3);
     }
 
     fn layout(channels: Vec<(&str, &str)>) -> PlotConfig {

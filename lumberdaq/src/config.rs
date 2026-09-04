@@ -73,6 +73,32 @@ impl DaqConfig {
         }
         inputs
     }
+
+    /// Every channel the setup produces, measured and calculated alike.
+    ///
+    /// The counterpart to `available_inputs`, and deliberately a different
+    /// list. That one answers "what may an equation read", which is measured
+    /// channels only: a calculated channel's output goes to the sink rather
+    /// than back through the calculator, so one cannot feed another. This one
+    /// answers "what is there to look at or record", which includes them —
+    /// what a calculated channel works out is usually the quantity somebody
+    /// actually wanted, and the last thing to hide from a plot.
+    ///
+    /// Calculated channels come last, as they do in the tree and in the
+    /// results: they are worked out from what precedes them.
+    pub fn all_channels(&self) -> Vec<ChannelRef> {
+        let mut channels = self.available_inputs();
+
+        if let Some(calculated) = self.calculated.as_ref() {
+            for channel in calculated.channels.iter() {
+                channels.push(ChannelRef {
+                    device: calculated.info.name.clone(),
+                    channel: channel.info.name.clone(),
+                });
+            }
+        }
+        channels
+    }
 }
 
 impl DeviceConfig {
