@@ -6,7 +6,9 @@
 //! across every project they open, and has no business in a project folder.
 //! So it lives beside the application rather than beside the data.
 
-use iced::Theme;
+use iced::theme::Palette;
+use iced::{color, Theme};
+use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -29,8 +31,47 @@ pub const DEFAULT_FONT_STEP: u8 = 3;
 /// unscaled rather than merely nearby.
 const SCALES: [f32; FONT_STEPS as usize] = [0.8, 0.9, 1.0, 1.15, 1.3];
 
-/// The theme to fall back on: what the app has always opened with.
-const DEFAULT_THEME: &str = "Ferra";
+/// The theme to fall back on.
+const DEFAULT_THEME: &str = "Lumberjack";
+
+/// The application's own theme.
+///
+/// Six colours, from which iced derives everything else: eight shades of the
+/// background between `weakest` and `strongest`, and a weak, base and strong
+/// of each accent with a text colour picked to read against it. What is set
+/// here is therefore the whole of the decision - the rest follows.
+///
+/// Built once. `Theme::custom` generates that extended palette on every call,
+/// and this is asked for while drawing.
+fn lumberjack() -> Theme {
+    static THEME: OnceLock<Theme> = OnceLock::new();
+
+    THEME
+        .get_or_init(|| {
+            Theme::custom(
+                "Lumberjack".to_string(),
+                Palette {
+                    background: color!(0x2B2B2B),
+                    text: color!(0xCFC8C8),
+                    primary: color!(0x356F74),
+                    success: color!(0x72CA77),
+                    warning: color!(0xFFB16C),
+                    danger: color!(0xF28585),
+                },
+            )
+        })
+        .clone()
+}
+
+/// Every theme on offer, ours first.
+///
+/// `Theme::ALL` is iced's built-in list and cannot know about a custom one, so
+/// the two are joined here rather than anywhere a picker happens to be drawn.
+pub fn themes() -> Vec<Theme> {
+    let mut all = vec![lumberjack()];
+    all.extend(Theme::ALL.iter().cloned());
+    all
+}
 
 /// What the person has chosen, as it is written down.
 ///
@@ -74,11 +115,10 @@ impl UserSettings {
 
     /// The theme named, or the default if the name means nothing here.
     pub fn theme(&self) -> Theme {
-        Theme::ALL
-            .iter()
+        themes()
+            .into_iter()
             .find(|theme| theme.to_string() == self.theme)
-            .cloned()
-            .unwrap_or(Theme::Ferra)
+            .unwrap_or_else(lumberjack)
     }
 
     pub fn set_theme(&mut self, theme: &Theme) {
@@ -189,6 +229,25 @@ fn settings_path() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn temporary_probe_palette() {
+        let theme = lumberjack();
+        let p = theme.extended_palette();
+        let show = |name: &str, c: iced::Color| {
+            println!("PROBE {:24} {:.3} {:.3} {:.3} a{:.2}", name, c.r, c.g, c.b, c.a)
+        };
+        show("background.base.color", p.background.base.color);
+        show("background.base.text", p.background.base.text);
+        show("background.weak.color", p.background.weak.color);
+        show("background.weak.text", p.background.weak.text);
+        show("background.strong.color", p.background.strong.color);
+        show("background.strong.text", p.background.strong.text);
+        show("background.weakest.color", p.background.weakest.color);
+        show("background.weaker.color", p.background.weaker.color);
+        println!("PROBE is_dark {}", p.is_dark);
+    }
+
     #[test]
     fn the_ordinary_step_does_not_scale() {
         assert_eq!(UserSettings::default().font_step, DEFAULT_FONT_STEP);
@@ -228,7 +287,21 @@ mod tests {
     #[test]
     fn a_theme_that_no_longer_exists_falls_back() {
         let settings = UserSettings { theme: "Chartreuse".to_string(), ..Default::default() };
-        assert_eq!(settings.theme(), Theme::Ferra);
+        assert_eq!(settings.theme(), lumberjack());
+    }
+
+    #[test]
+    fn the_default_is_the_applications_own_theme() {
+        assert_eq!(UserSettings::default().theme(), lumberjack());
+        assert_eq!(lumberjack().to_string(), DEFAULT_THEME);
+    }
+
+    #[test]
+    fn the_applications_theme_is_offered_alongside_the_built_in_ones() {
+        let offered = themes();
+
+        assert_eq!(offered.first(), Some(&lumberjack()));
+        assert_eq!(offered.len(), Theme::ALL.len() + 1);
     }
 
     #[test]

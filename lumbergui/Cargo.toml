@@ -2,14 +2,18 @@
 name = "lumbergui"
 version = "0.1.0"
 edition = "2021"
-description = "iced-based GUI, evaluated as a candidate alongside egui and the app/ Tauri prototype"
+description = "The iced interface to lumberdaq"
 
 [dependencies]
 lumberdaq = { path = "../lumberdaq" }
 # Not a new crate in the tree: lumberdaq already uses it, and a DataPoint
 # carries a chrono timestamp, so anything plotting one has to name the type.
 chrono = "0.4"
-iced = "0.14"
+# `svg` for the brand marks: the logo and the two mode icons are vector, and
+# they should stay sharp at every font size the settings offer. It pulls resvg
+# in, which is the cost of rendering SVG at all - the alternative is a PNG per
+# size, which is worse.
+iced = { version = "0.14", features = ["svg"] }
 # The native folder picker. There is no answer to "choose a directory" in iced
 # or in std, and typing a path into a text field is the alternative. Used only
 # from the file menu, and only its blocking form: the dialog is modal, so the
