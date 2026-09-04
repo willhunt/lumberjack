@@ -6,12 +6,10 @@
   "devices": [
     {
       "info": {
-        "name": "Rig",
-        "description": "No hardware attached. Stands in for two scaled sensors"
+        "name": "Rig"
       },
       "hardware": {
         "type": "MockHardware",
-        "description": "Mock streaming device",
         "acquisition": {
           "mode": "streaming",
           "sample_interval_ms": 50
@@ -20,7 +18,6 @@
           {
             "name": "Flow",
             "unit": "L/min",
-            "description": "4-20 mA transmitter, 0-29 L/min, across a 120 ohm shunt",
             "scale": {
               "from": "4-20 mA transmitter",
               "equation": "(((x / shunt_ohms) * 1000 - 4) / 16) * (high - low) + low",
@@ -37,7 +34,6 @@
           {
             "name": "Pressure",
             "unit": "bar",
-            "description": "0-10 bar transducer on a plain linear scale",
             "scale": "x * 5 + 5",
             "input": {
               "Sine": {
@@ -48,7 +44,6 @@
           {
             "name": "Raw sine",
             "unit": "V",
-            "description": "No scale, for comparison",
             "input": {
               "Sine": {
                 "frequency_hz": 0.5

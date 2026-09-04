@@ -6,17 +6,14 @@
   "devices": [
     {
       "info": {
-        "name": "Test device",
-        "description": "-"
+        "name": "Test device"
       },
       "hardware": {
         "type": "MockHardware",
-        "description": "This is a mock device that uses no hardware. It is used for testing and development purposes.",
         "channels": [
           {
             "name": "Random 1",
             "unit": "-",
-            "description": "Random number generator",
             "input": "Random"
           }
         ]
@@ -25,12 +22,10 @@
     },
     {
       "info": {
-        "name": "Serial test device",
-        "description": "Device streaming over serial."
+        "name": "Serial test device"
       },
       "hardware": {
         "type": "SerialStream",
-        "description": "Device streaming over serial.",
         "port": "COM3",
         "baudrate": 115200,
         "frame_pattern": "#([^#$]*)\\$",
@@ -38,13 +33,11 @@
           {
             "name": "Pressure",
             "unit": "Pa",
-            "description": "Differential pressure sensor",
             "index": 1
           },
           {
             "name": "Pump Activation",
             "unit": "-",
-            "description": "Pump on (1) or off (0)",
             "index": 3
           }
         ]

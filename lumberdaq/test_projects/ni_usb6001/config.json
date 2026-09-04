@@ -6,24 +6,20 @@
   "devices": [
     {
       "info": {
-        "name": "Legacy rig",
-        "description": "USB-6001 through NI-DAQmx"
+        "name": "Legacy rig"
       },
       "read_interval_ms": 100,
       "hardware": {
         "type": "NiDaqmx",
-        "description": "USB-6001",
         "device": "Dev1",
         "channels": [
           {
             "name": "Single ended",
-            "description": "ai0 against ground",
             "channel": 0,
             "single_ended": true
           },
           {
             "name": "Differential",
-            "description": "ai1 measured against ai5",
             "channel": 1,
             "single_ended": false
           }

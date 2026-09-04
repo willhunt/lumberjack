@@ -6,13 +6,11 @@
   "devices": [
     {
       "info": {
-        "name": "Transducer",
-        "description": "-"
+        "name": "Transducer"
       },
       "read_interval_ms": 50,
       "hardware": {
         "type": "MockHardware",
-        "description": "-",
         "acquisition": {
           "mode": "streaming",
           "sample_interval_ms": 50
@@ -21,7 +19,6 @@
           {
             "name": "High",
             "unit": "bar",
-            "description": "-",
             "input": {
               "Sine": {
                 "frequency_hz": 0.5
@@ -31,7 +28,6 @@
           {
             "name": "Low",
             "unit": "bar",
-            "description": "-",
             "input": {
               "Sine": {
                 "frequency_hz": 0.25
@@ -43,13 +39,11 @@
     },
     {
       "info": {
-        "name": "Slow probe",
-        "description": "-"
+        "name": "Slow probe"
       },
       "read_interval_ms": 500,
       "hardware": {
         "type": "MockHardware",
-        "description": "-",
         "acquisition": {
           "mode": "streaming",
           "sample_interval_ms": 500
@@ -58,7 +52,6 @@
           {
             "name": "Temp",
             "unit": "bar",
-            "description": "-",
             "input": {
               "Sine": {
                 "frequency_hz": 0.1
@@ -71,14 +64,12 @@
   ],
   "calculated": {
     "info": {
-      "name": "Derived",
-      "description": "-"
+      "name": "Derived"
     },
     "channels": [
       {
         "name": "Delta P",
         "unit": "bar",
-        "description": "same device, exact pairing",
         "inputs": {
           "high": {
             "device": "Transducer",
@@ -94,7 +85,6 @@
       {
         "name": "Flow",
         "unit": "L/min",
-        "description": "sqrt of a differential",
         "inputs": {
           "high": {
             "device": "Transducer",
@@ -110,7 +100,6 @@
       {
         "name": "Corrected",
         "unit": "bar",
-        "description": "mixed rates, across devices",
         "inputs": {
           "p": {
             "device": "Transducer",
