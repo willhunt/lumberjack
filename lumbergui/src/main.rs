@@ -4921,9 +4921,6 @@ impl AppDaq {
                     },
                     ..container::Style::default()
                 }),
-            button(text("Delete plot").size(14))
-                .style(button::danger)
-                .on_press(Message::PlotDeleted(index)),
         ]
         .spacing(8)
         .into()
