@@ -188,24 +188,46 @@ impl PicoHrdl {
 /// work is refused before anything is plugged in or recorded. The driver would
 /// reject most of this too, but only once a run was being started, and with
 /// less to say about why.
-/// Which unit is attached: `ADC-20`, `ADC-24`.
+/// What the attached unit says it is.
+pub struct Unit {
+    /// The variant it reports: `20` for an ADC-20, `24` for an ADC-24.
+    pub variant: String,
+    /// How many analog inputs that variant has, where the variant is one we
+    /// know. An ADC-20 has eight where an ADC-24 has sixteen.
+    ///
+    /// Separate from the variant so that a unit we do not recognise can still
+    /// say what it calls itself, which is the one case where being told the
+    /// model matters most.
+    pub inputs: Option<u16>,
+}
+
+/// Ask the attached unit what it is.
 ///
 /// The unit's own answer rather than anything the config claims, which is the
 /// point: a project written for one model opened with the other should say so
-/// rather than looking right until a channel is out of range. `None` when there
-/// is none attached, no driver, or it is already open.
-pub fn variant() -> Option<String> {
-    let unit = Hrdl::open().ok()?;
-    unit.info(picolog::hrdl::Info::Variant).ok().filter(|variant| !variant.is_empty())
-}
-
-/// How many analog inputs the attached unit has.
+/// rather than looking right until a channel is out of range. How many inputs
+/// it has decides both which channels can be chosen and which one a
+/// differential pair takes.
 ///
-/// An ADC-20 has eight where an ADC-24 has sixteen, and only the unit knows
-/// which it is. `None` when there is none attached, no driver, or it is already
-/// open — a unit being read by a run in progress cannot also be asked.
-pub fn input_count() -> Option<u16> {
-    Hrdl::open().and_then(|unit| unit.channel_count()).ok()
+/// `None` when there is none attached, no driver, or it is already open — a
+/// unit being read by a run in progress cannot also be asked.
+///
+/// One function rather than two because opening the unit is the expensive part
+/// by a wide margin: it loads the driver and initialises the unit over USB,
+/// which takes long enough to be felt. Both answers come from the same string
+/// the unit returns, so asking twice meant paying that twice for one question.
+pub fn identify() -> Option<Unit> {
+    let unit = Hrdl::open().ok()?;
+
+    let variant = unit
+        .info(picolog::hrdl::Info::Variant)
+        .ok()
+        .filter(|variant| !variant.is_empty())?;
+
+    // Cheap next to the open: the unit is already there to be asked.
+    let inputs = unit.channel_count().ok();
+
+    Some(Unit { variant, inputs })
 }
 
 pub(crate) fn check_channels(config: &PicoHrdlConfig) -> Result<()> {
