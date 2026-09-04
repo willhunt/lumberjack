@@ -9,6 +9,7 @@ pub mod calculated;
 pub mod check;
 pub mod equation;
 pub mod export;
+pub mod history;
 pub mod config;
 /// How plots are laid out. Read by every interface, drawn by none of them.
 pub mod plot_config;
