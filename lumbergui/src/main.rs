@@ -1,11 +1,20 @@
+mod acquisition;
+mod look;
+mod settings;
+
+// Glob imports, for these two only: they are this crate's own vocabulary
+// for drawing, used on nearly every line of `view`, and listing forty names
+// would say less than it costs. `look::menu` is spelled out where it is
+// called, because lucide has an icon of that name and a glob cannot choose.
+use crate::acquisition::*;
+use crate::look::*;
 use chrono::{DateTime, Local, Utc};
 use iced::widget::pane_grid::{self, Axis, Configuration, PaneGrid};
 use iced::widget::{
-    button, checkbox, column, container, opaque, pick_list, row, scrollable, space, stack,
-    slider, svg, text, text_input, tooltip, MouseArea, Row,
+    button, checkbox, column, container, opaque, pick_list, row, scrollable, slider, space,
+    stack, text, text_input, MouseArea, Row,
 };
 use iced::window;
-mod settings;
 
 use crate::settings::UserSettings;
 use iced::event::{self, Event, Status};
@@ -29,35 +38,13 @@ use lumberdaq::hardware::{pico_hrdl, serial_stream};
 use lumberdaq::hardware::HardwareConfig;
 use lumberdaq::plot_config::{self, PlotLayout, SplitAxis};
 use lumberdaq::project::Project;
-use lumberdaq::session::DeviceEvent;
-use lumberdaq::storage::{Batch, DataSink, Fanout, Recorder};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// How much of the recent past a plot shows comes from the saved layout's
-/// `history_seconds`.
-///
-/// However long it is, the viewport is slid by wall-clock time on every frame
-/// while points are only ever added when real samples arrive. Keeping those
-/// two apart is what makes the scroll continuous without drawing any value
-/// that wasn't measured: between batches the line simply stops short of the
-/// right edge.
-///
-/// Enough colours to tell a handful of traces apart. Cycled if there are more channels
-/// than colours, which is a legend problem to solve when it happens.
-const PALETTE: [Color; 6] = [
-    Color::from_rgb(0.30, 0.70, 1.00),
-    Color::from_rgb(1.00, 0.50, 0.20),
-    Color::from_rgb(0.45, 0.85, 0.45),
-    Color::from_rgb(0.95, 0.45, 0.75),
-    Color::from_rgb(0.85, 0.80, 0.35),
-    Color::from_rgb(0.65, 0.55, 1.00),
-];
 
 /// How many batches may be waiting for the interface before they start being
 /// dropped. See `DisplaySink::write_batch` for why dropping is the answer.
@@ -66,8 +53,6 @@ const CHANNEL_DEPTH: usize = 256;
 /// How far back a plot goes when its project has no saved layout to say.
 const DEFAULT_HISTORY_SECONDS: u64 = 5;
 
-/// Corner rounding shared by every field, so they look like one family.
-const FIELD_RADIUS: f32 = 6.0;
 
 /// How much of the window the sidebar takes, and how it divides between the
 /// device list and the settings below it.
@@ -210,186 +195,6 @@ fn devices_from(config: &DaqConfig) -> Vec<AppDevice> {
     });
 
     measured.chain(calculated).collect()
-}
-
-/// What the acquisition thread has to say. Data and status share one channel
-/// so they arrive in the order they happened, the same reason `DeviceMessage`
-/// does it that way inside lumberdaq.
-enum FromAcquisition {
-    Data { device: String, channel: String, datapoints: Vec<DataPoint> },
-    Status(String),
-    /// Whether one device is talking to its hardware.
-    ///
-    /// Kept apart from `Status` rather than read back out of a log line: the
-    /// library says which device and whether it came or went, and turning that
-    /// into a sentence and then parsing the sentence would be throwing the
-    /// answer away and guessing it back.
-    Connection { device: String, connected: bool },
-}
-
-/// A `DataSink` feeding the interface instead of a file.
-///
-/// A sink is how lumberdaq already offers data to something other than
-/// storage — `Fanout`'s documentation calls this case out as "a display fed
-/// the same data as the file it is being written to" — so watching a run
-/// needs no change to the library.
-struct DisplaySink {
-    to_interface: SyncSender<FromAcquisition>,
-}
-
-impl DataSink for DisplaySink {
-    fn init(&mut self, _config: &DaqConfig) -> lumberdaq::Result<()> {
-        Ok(())
-    }
-
-    /// Never fails, on purpose.
-    ///
-    /// `Fanout` reports a failing sink and that ends the run, which is the
-    /// right answer for a disk that has filled up and the wrong one for a
-    /// window somebody closed. So a full queue drops the batch and a vanished
-    /// receiver is ignored: the display losing points costs nothing, while
-    /// blocking here would stall collection, and the writing to disk behind it
-    /// in a run that was recording.
-    fn write_batch(&mut self, batch: &Batch) -> lumberdaq::Result<()> {
-        let _ = self.to_interface.try_send(FromAcquisition::Data {
-            device: batch.device.clone(),
-            channel: batch.channel.clone(),
-            datapoints: batch.datapoints.clone(),
-        });
-        Ok(())
-    }
-
-    fn flush(&mut self) -> lumberdaq::Result<()> {
-        Ok(())
-    }
-}
-
-/// A run in progress: how to hear from it, how to stop it, and how to tell
-/// when it has finished stopping.
-struct Acquisition {
-    from_acquisition: Receiver<FromAcquisition>,
-    /// Set to end the run. Read only by the acquisition thread.
-    stop: Arc<AtomicBool>,
-    /// Set to record what is being read. The `Recorder` on the other side
-    /// follows it: raising it builds a sink, lowering it flushes and drops
-    /// one, so watching a run leaves no results file behind at all.
-    recording: Arc<AtomicBool>,
-    thread: thread::JoinHandle<()>,
-}
-
-/// Whether a run is going, and whether one is on its way out.
-///
-/// Stopping is not instant: the thread notices the flag when it next comes
-/// round its read loop, so there is a moment where the run is neither going
-/// nor finished. Starting another one before the last has let go of its
-/// devices would mean two threads holding the same serial port.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RunState {
-    Running,
-    Stopping,
-    Stopped,
-}
-
-/// Run the acquisition on a thread of its own, reporting back over a channel.
-///
-/// The `Daq` stays on that thread: `run` takes `&mut self` and blocks until
-/// stopped, so while a run is in progress the devices are unreachable from
-/// here. Everything the interface knows arrives through the channel, which is
-/// why the device list is built from the config rather than from live devices.
-fn start_acquisition(config: DaqConfig, directory: PathBuf) -> Acquisition {
-    let (sender, receiver) = mpsc::sync_channel(CHANNEL_DEPTH);
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_in_thread = Arc::clone(&stop);
-    let recording = Arc::new(AtomicBool::new(false));
-    let recording_in_thread = Arc::clone(&recording);
-    // Read before the config is handed over, so the recorder knows what format
-    // to write when somebody eventually asks it to.
-
-    let thread = thread::spawn(move || {
-        let report = |text: String| {
-            let _ = sender.try_send(FromAcquisition::Status(text));
-        };
-
-        // from_config rather than lumberdaq::open: open attaches the project's
-        // storage sink up front, which creates the results file whether or not
-        // anybody records. The Recorder below builds one only when armed.
-        let mut daq = match lumberdaq::daq::Daq::from_config(config) {
-            Ok(daq) => daq,
-            Err(error) => return report(format!("could not build the setup: {}", error)),
-        };
-
-        let recorder = Recorder::new(
-            recording_in_thread,
-            Box::new(move || {
-                // Every recording goes in the one database and its runs table
-                // tells them apart, so starting again needs nothing said about
-                // where it should go.
-                Project::new(&directory).sink()
-            }),
-        );
-
-        // A run has one sink, so watching *and* recording means a sink that is
-        // both. The display is first: a storage failure ends the run, and the
-        // interface should have been given the batch before that happens.
-        let sink = Fanout::new()
-            .and("display", Box::new(DisplaySink { to_interface: sender.clone() }))
-            .and("recording", Box::new(recorder));
-
-        if let Err(error) = daq.set_sink(Box::new(sink)) {
-            return report(format!("could not attach the sinks: {}", error));
-        }
-
-        let connected = daq.connect();
-        report(format!(
-            "{} of {} devices connected",
-            connected.connected.len(),
-            daq.devices.len()
-        ));
-
-        // What the first attempt found, device by device. Without this a rig
-        // that connected cleanly would show nothing until something changed.
-        for device in connected.connected.iter() {
-            let _ = sender.try_send(FromAcquisition::Connection {
-                device: device.clone(),
-                connected: true,
-            });
-        }
-        for (device, _) in connected.failed.iter() {
-            let _ = sender.try_send(FromAcquisition::Connection {
-                device: device.clone(),
-                connected: false,
-            });
-        }
-
-        let outcome = daq.run(&stop_in_thread, &mut |event| {
-            // Both: the line for the log, and the fact for the dot beside the
-            // device. A problem is neither - the device is still connected,
-            // it just could not make sense of what it read.
-            if let DeviceEvent::Connected { device } | DeviceEvent::Disconnected { device, .. } =
-                &event
-            {
-                let _ = sender.try_send(FromAcquisition::Connection {
-                    device: device.clone(),
-                    connected: matches!(event, DeviceEvent::Connected { .. }),
-                });
-            }
-
-            let _ = sender.try_send(FromAcquisition::Status(match event {
-                DeviceEvent::Problem { device, error } => format!("{}: {}", device, error),
-                DeviceEvent::Connected { device } => format!("{} came back", device),
-                DeviceEvent::Disconnected { device, cause } => {
-                    format!("lost {}: {}", device, cause.unwrap_or_default())
-                }
-            }));
-        });
-
-        match outcome {
-            Ok(()) => report("run finished".to_string()),
-            Err(error) => report(format!("run ended: {}", error)),
-        }
-    });
-
-    Acquisition { from_acquisition: receiver, stop, recording, thread }
 }
 
 /// The trace one channel is drawn as.
@@ -540,611 +345,6 @@ fn build_plot(
     };
 
     AppPlot { number, name, channels: plotted, widget }
-}
-
-/// The fill behind anything that can be typed into or chosen from.
-///
-/// One colour for text fields, dropdowns and the lists that hold them, so a
-/// panel reads as a set of inputs rather than as several unrelated widgets.
-fn field_colour(theme: &Theme) -> Color {
-    theme.extended_palette().background.weakest.color
-}
-
-/// Text fields: the shared fill, and corners rounded to match everything else.
-fn field_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let palette = theme.extended_palette();
-    let mut style = text_input::default(theme, status);
-
-    style.background = iced::Background::Color(field_colour(theme));
-    style.border = Border {
-        radius: FIELD_RADIUS.into(),
-        width: 1.0,
-        color: match status {
-            text_input::Status::Focused { .. } => palette.primary.base.color,
-            _ => palette.background.weak.color,
-        },
-    };
-    style
-}
-
-/// The same field, when what is in it will not do.
-///
-/// Only the border changes. The message itself is a tooltip rather than a line
-/// of red under the field: these messages are a sentence or two long, they
-/// appear and vanish as somebody types, and a panel that grows and shrinks
-/// under the cursor while they are still typing is harder to use than one that
-/// stays put and says so quietly.
-fn field_error_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let mut style = field_style(theme, status);
-
-    style.border.color = theme.extended_palette().danger.base.color;
-    style.border.width = 2.0;
-    style
-}
-
-/// Dropdowns, styled to match the text fields beside them.
-fn field_pick_style(theme: &Theme, status: pick_list::Status) -> pick_list::Style {
-    let palette = theme.extended_palette();
-    let mut style = pick_list::default(theme, status);
-
-    style.background = iced::Background::Color(field_colour(theme));
-    style.border = Border {
-        radius: FIELD_RADIUS.into(),
-        width: 1.0,
-        color: match status {
-            pick_list::Status::Hovered | pick_list::Status::Opened { .. } => {
-                palette.primary.base.color
-            }
-            _ => palette.background.weak.color,
-        },
-    };
-    style
-}
-
-/// The label above a field: smaller than what it labels, and quieter, so the
-/// value is what the eye lands on.
-fn field_label(label: &str) -> Element<'_, Message> {
-    text(label)
-        .size(12)
-        // Softened from the theme's own text colour rather than a fixed grey,
-        // which would be invisible on one theme and harsh on another.
-        .style(|theme: &Theme| text::Style {
-            color: Some(Color { a: 0.7, ..theme.extended_palette().background.base.text }),
-        })
-        .into()
-}
-
-/// One line of a menu: something to do, or a rule between groups of them.
-enum MenuItem<'a> {
-    /// A label and what it does. `None` is shown greyed rather than hidden, so
-    /// the menu keeps its shape and its items do not move about — an entry
-    /// being unavailable is worth saying, where a menu that silently loses one
-    /// just looks different.
-    Entry(&'a str, Option<Message>),
-    /// The same, when the label is worked out rather than written here — a
-    /// plot's name, for instance, which nothing static can know.
-    Owned(String, Option<Message>),
-    Divider,
-}
-
-/// The menu a right click opens: a short list of things to do to one item.
-/// A rule rather than an entry, written where an entry would go.
-///
-/// The list is pairs of label and message, which has no room for "and a line
-/// here". A label nothing would ever use stands in, and `context_menu` turns
-/// it back into a divider. Cheaper than making every caller build `MenuItem`s
-/// for the sake of the one place that wants a rule.
-const DIVIDER: (&str, Option<Message>) = ("---", None);
-
-fn context_menu<'a>(entries: Vec<(&'a str, Option<Message>)>) -> Element<'a, Message> {
-    menu(
-        entries
-            .into_iter()
-            .map(|(label, message)| match label == DIVIDER.0 {
-                true => MenuItem::Divider,
-                false => MenuItem::Entry(label, message),
-            })
-            .collect(),
-        150.0,
-    )
-}
-
-/// How a dialog is drawn: a panel lifted clear of the interface behind it.
-///
-/// Shared so the three of them cannot drift apart — they are the same kind of
-/// thing and should not be three slightly different panels.
-fn dialog_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-
-    container::Style {
-        background: Some(palette.background.base.color.into()),
-        border: Border {
-            radius: 8.0.into(),
-            width: 1.0,
-            color: palette.background.strong.color,
-        },
-        ..container::Style::default()
-    }
-}
-
-/// A floating list of things to do.
-fn menu<'a>(items: Vec<MenuItem<'a>>, width: f32) -> Element<'a, Message> {
-    container(
-        column(items.into_iter().map(|item| match item {
-            MenuItem::Entry(label, message) => button(text(label).size(13))
-                .style(button::text)
-                .padding([2, 6])
-                .width(Fill)
-                .on_press_maybe(message)
-                .into(),
-            MenuItem::Owned(label, message) => button(text(label).size(13))
-                .style(button::text)
-                .padding([2, 6])
-                .width(Fill)
-                .on_press_maybe(message)
-                .into(),
-            // Groups what is above it apart from what is below, which is the
-            // whole of its job.
-            // The line is the inner container; the padding belongs to the
-            // outer one. Painting a padded container makes the padding part of
-            // the line, which is how a one pixel rule came out five thick.
-            MenuItem::Divider => container(
-                container(space::horizontal().height(1)).width(Fill).style(
-                    |theme: &Theme| container::Style {
-                        background: Some(
-                            theme.extended_palette().background.strong.color.into(),
-                        ),
-                        ..container::Style::default()
-                    },
-                ),
-            )
-            .width(Fill)
-            .padding(padding::top(4).bottom(4))
-            .into(),
-        }))
-        .spacing(2),
-    )
-    // Wide enough for its longest entry and no wider. Without this the menu
-    // takes whatever the layer it floats on offers, which is the window.
-    .width(width)
-    .padding(4)
-    .style(|theme: &Theme| {
-        let palette = theme.extended_palette();
-
-        container::Style {
-            background: Some(palette.background.base.color.into()),
-            border: Border {
-                radius: FIELD_RADIUS.into(),
-                width: 1.0,
-                color: palette.background.strong.color,
-            },
-            ..container::Style::default()
-        }
-    })
-    .into()
-}
-
-/// The soft line under a pane's heading.
-///
-/// A free function rather than a method: it borrows nothing, and as a method
-/// its result would be tied to the borrow of `self`, which is shorter than the
-/// widgets it has to sit alongside.
-fn pane_rule<'a>() -> Element<'a, Message> {
-    container(space::horizontal().height(1))
-        .width(Fill)
-        .style(|theme: &Theme| container::Style {
-            background: Some(
-                Color { a: 0.4, ..theme.extended_palette().background.strong.color }.into(),
-            ),
-            ..container::Style::default()
-        })
-        .into()
-}
-
-/// The bubble a tooltip is drawn in. Solid, so what is underneath does not
-/// show through the explanation.
-fn error_tip_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-    let mut style = tip_style(theme);
-
-    style.border.color = palette.danger.base.color;
-    style.text_color = Some(palette.danger.base.color);
-    style
-}
-
-fn tip_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-
-    container::Style {
-        background: Some(palette.background.base.color.into()),
-        text_color: Some(palette.background.base.text),
-        border: Border {
-            radius: FIELD_RADIUS.into(),
-            width: 1.0,
-            color: palette.background.strong.color,
-        },
-        ..container::Style::default()
-    }
-}
-
-/// One of the three transport buttons.
-///
-/// Always the same three, always in the same place. What changes is whether
-/// this one is lit: the colour says what the rig is doing, where the icon says
-/// what the button is for.
-///
-/// A function with a named lifetime rather than a closure, because `Tooltip`
-/// is invariant over its lifetime — a closure taking `Element<'_, _>` gets a
-/// fresh lifetime that cannot then be shortened to match what it returns.
-fn transport<'a>(
-    icon: Element<'a, Message>,
-    tip: &'a str,
-    message: Message,
-    // The button's own padding is most of what separates one icon from the
-    // next, so how tight a group is belongs to the group rather than here.
-    padding: impl Into<iced::Padding>,
-) -> Element<'a, Message> {
-    tooltip(
-        // No chrome. The state lives in the shape's own colour, so a button
-        // drawn around it would be a second background saying the same thing
-        // less clearly.
-        button(icon).style(button::text).padding(padding).on_press(message),
-        container(text(tip).size(13)).padding(4).style(tip_style),
-        tooltip::Position::Bottom,
-    )
-    .into()
-}
-
-/// One of the three transport shapes, in the colour its state calls for.
-///
-/// Lit says what the rig is doing — reading, or recording — and unlit is the
-/// ordinary text colour, so the three of them read as a row of controls rather
-/// than as three lamps of which two are off. The shape is filled, so its
-/// colour is the whole of the signal.
-fn transport_mark<'a>(
-    bytes: &'static [u8],
-    lit: bool,
-    colour: fn(&iced::theme::palette::Extended) -> Color,
-) -> Element<'a, Message> {
-    tinted_mark(bytes, TITLE_ICON, move |theme: &Theme| {
-        let palette = theme.extended_palette();
-
-        match lit {
-            true => colour(palette),
-            false => palette.background.base.text,
-        }
-    })
-}
-
-/// Something known about the thing selected, said rather than edited.
-///
-/// The reporting counterpart to `rig_field`: same shape on the page, no field,
-/// because nothing here is something to change. What was recorded is what was
-/// recorded.
-fn fact<'a>(label: &'a str, value: String) -> Element<'a, Message> {
-    column![field_label(label), text(value).size(14)].spacing(2).into()
-}
-
-/// What a recorded device was, from the configuration stored with the run.
-///
-/// The backend's own name where the json gives one up, and the raw text where
-/// it does not: a file written by a later lumberjack may hold a shape this one
-/// has never heard of, and showing it is more use than admitting nothing.
-fn recorded_hardware(hardware: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(hardware)
-        .ok()
-        .as_ref()
-        .and_then(|json| json.get("type"))
-        .and_then(|kind| kind.as_str())
-        .map(|kind| kind.to_string())
-        .unwrap_or_else(|| hardware.to_string())
-}
-
-/// How a channel row in a tree is drawn.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RowLook {
-    /// Nothing special about it.
-    Plain,
-    /// What the settings panel is talking about.
-    Picked,
-    /// On a plot, but not what is selected.
-    Drawn,
-}
-
-/// A channel row: something to click, and something a drag can start from.
-///
-/// Not a `button`, deliberately. A button captures the press and publishes on
-/// the *release*, and only if the pointer is still over it — so a press that
-/// travels to a plot and lets go there never produces a message at all, which
-/// is exactly the gesture a drag is. It also captures the press, so a
-/// `MouseArea` wrapped round one never sees it either.
-///
-/// A `MouseArea` over a styled container reports the press when it happens,
-/// which is what arms a drag, and leaves the release to be seen wherever it
-/// lands.
-fn channel_row<'a>(
-    content: Element<'a, Message>,
-    look: RowLook,
-    on_press: Message,
-    on_right_press: Message,
-) -> Element<'a, Message> {
-    let body = container(content).padding(4).width(Fill).style(move |theme: &Theme| {
-        let palette = theme.extended_palette();
-
-        match look {
-            RowLook::Plain => container::Style::default(),
-            RowLook::Picked => container::Style {
-                background: Some(palette.primary.base.color.into()),
-                text_color: Some(palette.primary.base.text),
-                border: Border { radius: FIELD_RADIUS.into(), ..Border::default() },
-                ..container::Style::default()
-            },
-            RowLook::Drawn => container::Style {
-                background: Some(palette.secondary.base.color.into()),
-                text_color: Some(palette.secondary.base.text),
-                border: Border { radius: FIELD_RADIUS.into(), ..Border::default() },
-                ..container::Style::default()
-            },
-        }
-    });
-
-    MouseArea::new(body).on_press(on_press).on_right_press(on_right_press).into()
-}
-
-/// The brand marks, kept beside the project rather than inside the interface
-/// that happens to draw them: the same logo belongs on the readme.
-const LOGO: &[u8] = include_bytes!("../../assets/Lumberjack.svg");
-const BRAND_FONT: &[u8] = include_bytes!("../../assets/IBMPlexMono-Medium.ttf");
-const RECORD_MODE: &[u8] = include_bytes!("../../assets/RecordMode.svg");
-/// The red of the logo, for the one thing that is the brand's rather than the
-/// theme's. Everything else takes its colour from the palette so it follows
-/// whichever theme is chosen; a brand mark does not change with the furniture.
-const BRAND_RED: Color = Color::from_rgb(205.0 / 255.0, 100.0 / 255.0, 98.0 / 255.0);
-
-/// How tall the transport shapes are drawn.
-const TITLE_ICON: f32 = 26.0;
-
-/// How tall the logo and the two mode marks are drawn.
-///
-/// Larger than the transport shapes, and larger for a reason: those are bare
-/// silhouettes where these are filled tiles with a glyph knocked out of them,
-/// so the same box height gives the tiles far less room for their detail.
-const MODE_ICON: f32 = 32.0;
-
-const PLAY: &[u8] = include_bytes!("../../assets/Play.svg");
-const STOP: &[u8] = include_bytes!("../../assets/Stop.svg");
-const RECORD: &[u8] = include_bytes!("../../assets/Record.svg");
-const DATA_MODE: &[u8] = include_bytes!("../../assets/DataMode.svg");
-
-/// The face the name is set in.
-///
-/// Named by its typographic family rather than by the file: the name table
-/// calls the family "IBM Plex Mono Medium" and the *typographic* family "IBM
-/// Plex Mono" with a subfamily of Medium, and it is the latter pair that a
-/// font database matches on. Asking for the file's own family name would find
-/// nothing and fall back to the default face without saying so.
-const BRAND: iced::Font = iced::Font {
-    family: iced::font::Family::Name("IBM Plex Mono"),
-    weight: iced::font::Weight::Medium,
-    stretch: iced::font::Stretch::Normal,
-    style: iced::font::Style::Normal,
-};
-
-/// What a value that cannot be edited says about itself.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Tone {
-    /// Ordinary: a fact, neither good nor bad.
-    Plain,
-    Good,
-    Bad,
-}
-
-/// Something the interface knows, laid out like a field but not one.
-///
-/// Shaped like the fields around it so a panel reads as one list rather than
-/// as prose interrupted by inputs, and dimmed so it does not invite typing.
-/// The dimming is the whole of the distinction, which is why it has to be
-/// visible: a read only box that looks editable teaches the wrong thing about
-/// every other box on the panel.
-fn read_only<'a>(label: &'a str, value: String, tone: Tone) -> Element<'a, Message> {
-    let field = container(text(value).size(14).style(move |theme: &Theme| {
-        let palette = theme.extended_palette();
-
-        text::Style {
-            color: Some(match tone {
-                Tone::Plain => palette.background.weak.text,
-                Tone::Good => palette.success.base.color,
-                Tone::Bad => palette.danger.base.color,
-            }),
-        }
-    }))
-    .width(Fill)
-    .padding([5, 8])
-    .style(|theme: &Theme| {
-        let palette = theme.extended_palette();
-
-        container::Style {
-            // No fill at all. A filled box is what an editable field looks
-            // like here, so the distinction is that this one is only an
-            // outline - and the outline is the application's own background
-            // colour, which reads as an inset line against the lighter pane
-            // and stays right in whatever theme is chosen.
-            background: None,
-            border: Border {
-                radius: FIELD_RADIUS.into(),
-                width: 1.0,
-                color: palette.background.base.color,
-            },
-            ..container::Style::default()
-        }
-    });
-
-    column![field_label(label), field].spacing(2).into()
-}
-
-/// A control that is plain until the pointer is on it, and then is a warning.
-///
-/// Deleting is a press away wherever it appears, so it should not shout while
-/// somebody is reading past it — but it must not be mistaken for something
-/// harmless at the moment it is about to be pressed either.
-fn danger_on_hover(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
-    let mut style = button::text(theme, status);
-
-    style.text_color = match status {
-        button::Status::Hovered | button::Status::Pressed => palette.danger.base.color,
-        button::Status::Active => palette.background.base.text,
-        button::Status::Disabled => palette.background.weak.text,
-    };
-    style
-}
-
-/// How wide across the connection dot is.
-const DOT: f32 = 8.0;
-
-/// Whether a device is talking to its hardware, said in one dot.
-///
-/// Directly after the name rather than at the end of the row: it belongs to
-/// the name, and a column of dots down the right hand edge would read as a
-/// separate thing to scan.
-fn connection_dot<'a>(connected: Option<bool>) -> Element<'a, Message> {
-    let Some(connected) = connected else {
-        return space::horizontal().width(0).into();
-    };
-
-    // A drawn circle rather than a text glyph. A glyph sits where the font
-    // puts it in the line box, which is neither centred on the row nor the
-    // size it was asked for - a filled circle at size 22 draws about eight
-    // pixels of ink somewhere above the baseline. A box of a known size,
-    // rounded until it is a circle, is exactly as tall as it looks, so it
-    // centres with the row like anything else does.
-    container(space::horizontal().width(DOT).height(DOT))
-        .style(move |theme: &Theme| {
-            let palette = theme.extended_palette();
-
-            container::Style {
-                background: Some(
-                    match connected {
-                        true => palette.success.base.color,
-                        false => palette.danger.base.color,
-                    }
-                    .into(),
-                ),
-                border: Border { radius: (DOT / 2.0).into(), ..Border::default() },
-                ..container::Style::default()
-            }
-        })
-        .into()
-}
-
-/// One of the marks, drawn at a given size.
-///
-/// Vector rather than a bitmap so it stays sharp at every text size the
-/// settings offer, and so it follows `scale_factor` without a second file.
-fn mark<'a>(bytes: &'static [u8], size: f32) -> Element<'a, Message> {
-    svg(svg::Handle::from_memory(bytes)).width(size).height(size).into()
-}
-
-/// How wide one of the marks is for its height, from its own viewBox.
-///
-/// Parsed rather than written down beside each icon: the files are the source
-/// of truth for their own shape, and a number copied out of one is a number
-/// that goes stale when the icon is redrawn.
-fn aspect_of(bytes: &[u8]) -> f32 {
-    let text = std::str::from_utf8(bytes).unwrap_or_default();
-    let Some(box_start) = text.find("viewBox=\"") else { return 1.0 };
-    let rest = &text[box_start + 9..];
-    let Some(end) = rest.find('"') else { return 1.0 };
-
-    let numbers: Vec<f32> =
-        rest[..end].split_whitespace().filter_map(|part| part.parse().ok()).collect();
-
-    match numbers.as_slice() {
-        [_, _, width, height] if *height > 0.0 => width / height,
-        _ => 1.0,
-    }
-}
-
-/// One of the marks, drawn in a colour of our choosing.
-///
-/// `svg::Style` carries a colour filter that replaces every colour in the
-/// file, so a single colour silhouette can be tinted per state. Only for marks
-/// that are one colour: the logo has two, and tinting would flatten it.
-fn tinted_mark<'a>(
-    bytes: &'static [u8],
-    size: f32,
-    colour: impl Fn(&Theme) -> Color + 'a,
-) -> Element<'a, Message> {
-    svg(svg::Handle::from_memory(bytes))
-        // Both dimensions, taken from the file's own aspect. Setting only the
-        // height and leaving the width to shrink looks equivalent and is not:
-        // `ContentFit::Contain` fits inside *both*, so whatever width the
-        // layout happened to leave over would scale the icon down. Widening a
-        // button's padding then made its icon smaller, which is not a
-        // relationship anybody would go looking for.
-        .height(size)
-        .width(size * aspect_of(bytes))
-        .style(move |theme: &Theme, _status| svg::Style { color: Some(colour(theme)) })
-        .into()
-}
-
-/// An icon-only control, with the words it hasn't got.
-///
-/// A button showing only a symbol is quick to use once you know it and opaque
-/// until then, and a tooltip is how it stops being opaque without taking the
-/// room a label would.
-///
-/// A free function rather than a method for the same reason `transport` is:
-/// `Tooltip` is invariant in its lifetime, so building one inside a method
-/// would tie the result to the borrow of `self` rather than to the interface
-/// it belongs in.
-fn hint<'a>(control: impl Into<Element<'a, Message>>, tip: &'a str) -> Element<'a, Message> {
-    tooltip(
-        control,
-        container(text(tip).size(13)).padding(4).style(tip_style),
-        tooltip::Position::Bottom,
-    )
-    .into()
-}
-
-/// Something with a message waiting behind it.
-///
-/// Takes the message by value rather than by reference, because these are
-/// worked out while drawing - the verdict on what is in a field - and so there
-/// is nothing for a borrow to point at.
-///
-/// A free function for the same reason `transport` and `hint` are: `Tooltip`
-/// is invariant in its lifetime, so building one inside a method would tie the
-/// result to the borrow of `self`.
-fn explaining<'a>(control: Element<'a, Message>, message: String) -> Element<'a, Message> {
-    tooltip(
-        control,
-        container(text(message).size(13)).padding(6).max_width(320).style(error_tip_style),
-        tooltip::Position::Bottom,
-    )
-    .into()
-}
-
-/// A label with its explanation behind it, rather than beneath it.
-///
-/// The paragraph a setting needs to be understood is worth having and not
-/// worth the room it takes once it has been read, which is what a tooltip is
-/// for.
-fn labelled<'a>(label: &'a str, explanation: &'a str) -> Element<'a, Message> {
-    tooltip(
-        field_label(label),
-        container(text(explanation).size(13)).padding(6).max_width(260).style(tip_style),
-        tooltip::Position::Right,
-    )
-    .into()
-}
-
-/// The background a plot's card is drawn on.
-///
-/// One definition because the card and the plot inside it have to agree: the
-/// point of the card is that a plot and its legend look like one thing.
-fn card_colour(theme: &Theme) -> Color {
-    theme.extended_palette().background.weaker.color
 }
 
 /// A device name nothing in the setup is using yet.
@@ -4919,8 +4119,8 @@ impl AppDaq {
     fn plot_menu_entries(&self) -> Element<'_, Message> {
         let plots = self.plot_names();
         match plots.is_empty() {
-            true => menu(vec![MenuItem::Entry("No plots yet", None)], 150.0),
-            false => menu(
+            true => look::menu(vec![MenuItem::Entry("No plots yet", None)], 150.0),
+            false => look::menu(
                 plots
                     .into_iter()
                     .map(|(at, name)| MenuItem::Owned(name, Some(Message::PlotChosen(at))))
@@ -5891,7 +5091,402 @@ impl AppDaq {
             })
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    /// The rig as a tree: every device, and the channels under the open ones.
+    fn devices_pane(&self) -> Element<'_, Message> {
+        let add_device_button = hint(
+            button(circle_plus())
+                .style(button::text)
+                .padding(4)
+                .on_press(Message::AddDeviceOpened),
+            "Add a device",
+        );
+
+        let device_list =
+            column(self.devices.iter().enumerate().map(|(index, device)| {
+                // Expanding and inspecting are different intentions,
+                // so they get different targets: the chevron opens
+                // the device, the name selects it.
+                let chevron: Element<'_, Message> = match device.channels.is_empty() {
+                    true => space::horizontal().width(22).into(),
+                    false => button(match device.expanded {
+                        true => chevron_down().size(14),
+                        false => chevron_right().size(14),
+                    })
+                    .style(button::text)
+                    .padding(4)
+                    .on_press(Message::ToggleDevice(index))
+                    .into(),
+                };
+
+                let (selected, press, add) = match device.kind {
+                    DeviceKind::Measured(at) => (
+                        self.selected == Some(Selection::Device(at)),
+                        Message::DeviceSelected(at),
+                        Some(Message::ChannelAdded(at)),
+                    ),
+                    DeviceKind::Calculated => (
+                        self.selected == Some(Selection::Calculated),
+                        Message::CalculatedSelected,
+                        Some(Message::CalculatedChannelAdded),
+                    ),
+                };
+
+                let device_header = row![
+                    chevron,
+                    button(text(&device.name))
+                        .style(match selected {
+                            true => button::primary,
+                            false => button::text,
+                        })
+                        .padding(4)
+                        .on_press(press),
+                    // Held off the name rather than butted against
+                    // it: it is a fact about the device, not part
+                    // of what it is called.
+                    container(connection_dot(device.connected))
+                        .padding(padding::left(6)),
+                    space::horizontal(),
+                    // Adding a channel is a change to the rig like
+                    // any other, so it waits for the run to stop.
+                    hint(
+                        button(circle_plus().size(14))
+                            .style(button::text)
+                            .padding(4)
+                            .on_press_maybe(match self.rig_editable() {
+                                true => add,
+                                false => None,
+                            }),
+                        "Add a channel to this device",
+                    ),
+                ]
+                .align_y(Center);
+
+                let mut entry = column![match device.kind {
+                    DeviceKind::Measured(at) => Element::from(
+                        MouseArea::new(device_header)
+                            .on_right_press(Message::ContextOpened(
+                                ContextMenu::Device(at)
+                            ))
+                    ),
+                    DeviceKind::Calculated => Element::from(
+                        MouseArea::new(device_header).on_right_press(
+                            Message::ContextOpened(ContextMenu::Calculated),
+                        ),
+                    ),
+                }];
+
+                if device.expanded {
+                    entry = entry.push(
+                        column(device.channels.iter().enumerate().map(
+                            |(position, channel)| {
+                                let reading = match channel.latest {
+                                    Some(value) => {
+                                        format!("{:.3} {}", value, channel.unit)
+                                    }
+                                    None => "—".to_string(),
+                                };
+
+                                // The same two questions as the
+                                // device row, asked of the channel.
+                                let (selected, press) = match device.kind {
+                                    DeviceKind::Measured(at) => (
+                                        self.selected
+                                            == Some(Selection::Channel(at, position)),
+                                        Message::ChannelSelected(at, position),
+                                    ),
+                                    DeviceKind::Calculated => (
+                                        self.selected
+                                            == Some(Selection::CalculatedChannel(
+                                                position,
+                                            )),
+                                        Message::CalculatedChannelSelected(position),
+                                    ),
+                                };
+
+                                let row: Element<'_, Message> =
+                                    row![
+                                        // The icon does the
+                                        // indenting, so a channel
+                                        // reads as belonging to
+                                        // the device above it
+                                        // without a margin as well.
+                                        // Which icon says where the
+                                        // value came from: read in,
+                                        // or worked out.
+                                        match device.kind {
+                                            DeviceKind::Measured(_) =>
+                                                square_arrow_right().size(11),
+                                            DeviceKind::Calculated =>
+                                                square_equal().size(11),
+                                        },
+                                        text(&channel.name).size(14),
+                                        space::horizontal(),
+                                        // Dressed as a field, since
+                                        // that is what it is: a
+                                        // value belonging to this
+                                        // channel rather than more
+                                        // of its name.
+                                        container(text(reading).size(13))
+                                            .padding([2, 6])
+                                            .style(|theme: &Theme| container::Style {
+                                                background: Some(
+                                                    field_colour(theme).into(),
+                                                ),
+                                                border: Border {
+                                                    radius: FIELD_RADIUS.into(),
+                                                    width: 1.0,
+                                                    color: theme
+                                                        .extended_palette()
+                                                        .background
+                                                        .weak
+                                                        .color,
+                                                },
+                                                ..container::Style::default()
+                                            }),
+                                    ]
+                                    // Keeps the name off the
+                                    // reading when the pane is
+                                    // dragged narrow: the flexible
+                                    // space between them goes to
+                                    // nothing, this does not.
+                                    .spacing(8)
+                                    .align_y(Center)
+                                .into();
+
+                                let on_right = match device.kind {
+                                    DeviceKind::Measured(at) => {
+                                        ContextMenu::Channel(at, position)
+                                    }
+                                    DeviceKind::Calculated => {
+                                        ContextMenu::CalculatedChannel(position)
+                                    }
+                                };
+
+                                channel_row(
+                                    row,
+                                    match selected {
+                                        true => RowLook::Picked,
+                                        false => RowLook::Plain,
+                                    },
+                                    press,
+                                    Message::ContextOpened(on_right),
+                                )
+                            },
+                        ))
+                        .spacing(4)
+                        // Lined up with the device name above, not
+                        // merely inboard of it: the chevron is 22
+                        // wide and the name button pads by 4, so
+                        // its text starts at 26 - and the row here
+                        // pads by 4 of its own, leaving 22.
+                        .padding(padding::left(22)),
+                    );
+                }
+
+                entry.into()
+            }))
+            .spacing(5);
+
+        self.pane(
+            row![text("Devices"), space::horizontal(), add_device_button]
+                .align_y(Center),
+            device_list.into(),
+        )
+    }
+
+    /// Whatever is selected, and what can be changed about it.
+    fn config_pane(&self) -> Element<'_, Message> {
+        // Absent rather than greyed. A greyed control is worth
+        // having where its absence would be a surprise - the
+        // transport buttons keep their places - but nothing is
+        // owed an explanation for why a recorded run has no delete.
+        let remove = self.delete_selected().map(|message| {
+            Element::from(
+                button(trash_two().size(14))
+                    .style(danger_on_hover)
+                    .padding(4)
+                    .on_press(message),
+            )
+        });
+
+        // Not named `settings`: that is the gear icon's function.
+        let panel: Element<'_, Message> = match self.selected {
+            Some(Selection::Plot(index)) => match self.plots.get(index) {
+                Some(plot) => self.plot_settings(index, plot),
+                // The selected plot was deleted from under us.
+                None => text("Nothing selected.").size(14).into(),
+            },
+            Some(Selection::AllPlots) => self.all_plots_settings(),
+            Some(Selection::ViewPlot(index)) => self.view_plot_settings(index),
+            Some(Selection::Run(run)) => self.run_settings(run),
+            Some(Selection::RunDevice(run, device)) => {
+                self.run_device_settings(run, device)
+            }
+            Some(Selection::RunChannel(run, device, channel)) => {
+                self.run_channel_settings(run, device, channel)
+            }
+            Some(Selection::Device(index)) => self.device_settings(index),
+            Some(Selection::Channel(device, channel)) => {
+                self.channel_settings(device, channel)
+            }
+            Some(Selection::Calculated) => self.calculated_settings(),
+            Some(Selection::CalculatedChannel(channel)) => {
+                self.calculated_channel_settings(channel)
+            }
+            None => {
+                text("Select a device, channel or plot to configure it.").size(14).into()
+            }
+        };
+
+        self.pane(
+            row![text("Configuration"), space::horizontal()]
+                .extend(remove)
+                .align_y(Center),
+            panel,
+        )
+    }
+
+    /// What the run has had to say.
+    ///
+    /// Builds its own `Content` rather than returning an element, because it
+    /// is the one pane that draws no heading of its own when it is shut.
+    fn log_pane(&self) -> pane_grid::Content<'_, Message> {
+        let samples: usize = self
+            .devices
+            .iter()
+            .flat_map(|device| device.channels.iter())
+            .map(|channel| channel.samples)
+            .sum();
+
+        let chevron = button(match self.log_open {
+            true => chevron_down().size(14),
+            false => chevron_right().size(14),
+        })
+        .style(button::text)
+        .padding(2)
+        .on_press(Message::LogToggled);
+
+        // Shut, the pane is its heading and nothing else — no rule
+        // either, since there is nothing under it to divide from.
+        // The newest line rides along on the bar, so a run can be
+        // watched without opening it.
+        if !self.log_open {
+            let latest = match self.log.last() {
+                Some(entry) => entry.text.clone(),
+                None => String::new(),
+            };
+
+            return pane_grid::Content::new(self.pane_heading(
+                row![chevron, text("Log"), text(latest).size(13), space::horizontal()]
+                    // So the newest line reads as a separate thing
+                    // from the title rather than running on from it.
+                    .spacing(12)
+                    // Bottom rather than centre: the line is
+                    // smaller than the title, and centring it
+                    // leaves it floating above the title's
+                    // baseline instead of sitting on it.
+                    .align_y(Bottom),
+            ))
+            .style(container::rounded_box);
+        }
+
+        let lines = column(self.log.iter().map(|entry| {
+            // Local time and the date with it. The stamp is kept
+            // in UTC, which is right for a record and wrong for
+            // reading: a run either side of midnight otherwise
+            // shows two times that sort the wrong way by eye.
+            text(format!(
+                "{} - {}",
+                entry.at.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S"),
+                entry.text
+            ))
+            .size(13)
+            .into()
+        }))
+        .spacing(2);
+
+        pane_grid::Content::new(
+            column![
+                self.pane_heading(
+                    row![
+                        chevron,
+                        text("Log"),
+                        space::horizontal(),
+                        text(format!("{} samples", samples)).size(14),
+                    ]
+                    .align_y(Center),
+                ),
+                pane_rule(),
+                // Anchored to the bottom so the newest line is the
+                // one in view, the way a terminal behaves. Cheaper
+                // and steadier than scrolling there on every line.
+                scrollable(lines.width(Fill).padding(10))
+                    .anchor_bottom()
+                    .height(Fill),
+            ]
+            .width(Fill),
+        )
+        .style(container::rounded_box)
+    }
+
+    /// The plots, in a grid of their own.
+    fn data_pane(&self) -> Element<'_, Message> {
+        let add_plot_button = hint(
+            button(circle_plus())
+                .style(button::text)
+                .padding(4)
+                .on_press(Message::AddPlot),
+            "Add a plot",
+        );
+
+        // Whichever set of plots this mode is about. The panes and
+        // the plots are swapped together, so a layout arranged for
+        // watching a rig is still there when recording comes back.
+        let (panes, plots) = match self.mode {
+            Mode::Record => (&self.plot_panes, &self.plots),
+            Mode::View => (&self.view_panes, &self.view_plots),
+        };
+
+        // A grid of its own inside this pane. The plots arrange
+        // against each other; the sidebar is not somewhere a plot
+        // can be dragged.
+        let cards = PaneGrid::new(panes, |_pane, number, _maximised| {
+            let found =
+                plots.iter().enumerate().find(|(_, plot)| plot.number == *number);
+
+            match found {
+                Some((index, plot)) => self.plot_card(index, plot),
+                // A pane whose plot has gone. Closed on the next
+                // deletion rather than drawn as an error.
+                None => pane_grid::Content::new(space::horizontal().width(0)),
+            }
+        })
+        .width(Fill)
+        .height(Fill)
+        .spacing(8)
+        .on_click(Message::PlotClicked)
+        .on_drag(Message::PlotDragged)
+        .on_resize(10, Message::PlotsResized);
+
+        self.pane_filling_pressable(
+            row![
+                // The heading is the way to the settings for every
+                // plot at once, the same as selecting a device is
+                // the way to its own. A gear beside it would be a
+                // second way to reach one panel.
+                text("Data"),
+                space::horizontal(),
+                add_plot_button
+            ]
+            .align_y(Center),
+            Message::AllPlotsSelected,
+            cards.into(),
+        )
+    }
+
+    /// The strip along the top: what the application is, what the rig is
+    /// doing, and which half of the application you are looking at.
+    fn title_bar(&self) -> Element<'_, Message> {
         // The app name is the way into the file menu, with the chevron saying
         // so. Styled as text rather than as a button, because a menu bar is
         // read as a name until it is used.
@@ -5985,7 +5580,7 @@ impl AppDaq {
         ]
         .spacing(0);
 
-        let header = container(
+        container(
             row![
                 title,
                 space::horizontal(),
@@ -6000,7 +5595,13 @@ impl AppDaq {
             .spacing(14)
             .padding(6)
             .align_y(Center),
-        );
+        )
+        .into()
+    }
+
+    fn view(&self) -> Element<'_, Message> {
+        let header = self.title_bar();
+
 
         // Each pane's content is built fresh here rather than once above,
         // since this closure runs once per pane and a Button/Element isn't
@@ -6008,388 +5609,10 @@ impl AppDaq {
         let pane_grid = PaneGrid::new(&self.panes, |_id, kind, _is_maximized| {
             let content: Element<'_, Message> = match kind {
                 PaneKind::Devices if self.mode == Mode::View => self.run_tree(),
-                PaneKind::Devices => {
-                    let add_device_button = hint(
-                        button(circle_plus())
-                            .style(button::text)
-                            .padding(4)
-                            .on_press(Message::AddDeviceOpened),
-                        "Add a device",
-                    );
-
-                    let device_list =
-                        column(self.devices.iter().enumerate().map(|(index, device)| {
-                            // Expanding and inspecting are different intentions,
-                            // so they get different targets: the chevron opens
-                            // the device, the name selects it.
-                            let chevron: Element<'_, Message> = match device.channels.is_empty() {
-                                true => space::horizontal().width(22).into(),
-                                false => button(match device.expanded {
-                                    true => chevron_down().size(14),
-                                    false => chevron_right().size(14),
-                                })
-                                .style(button::text)
-                                .padding(4)
-                                .on_press(Message::ToggleDevice(index))
-                                .into(),
-                            };
-
-                            let (selected, press, add) = match device.kind {
-                                DeviceKind::Measured(at) => (
-                                    self.selected == Some(Selection::Device(at)),
-                                    Message::DeviceSelected(at),
-                                    Some(Message::ChannelAdded(at)),
-                                ),
-                                DeviceKind::Calculated => (
-                                    self.selected == Some(Selection::Calculated),
-                                    Message::CalculatedSelected,
-                                    Some(Message::CalculatedChannelAdded),
-                                ),
-                            };
-
-                            let device_header = row![
-                                chevron,
-                                button(text(&device.name))
-                                    .style(match selected {
-                                        true => button::primary,
-                                        false => button::text,
-                                    })
-                                    .padding(4)
-                                    .on_press(press),
-                                // Held off the name rather than butted against
-                                // it: it is a fact about the device, not part
-                                // of what it is called.
-                                container(connection_dot(device.connected))
-                                    .padding(padding::left(6)),
-                                space::horizontal(),
-                                // Adding a channel is a change to the rig like
-                                // any other, so it waits for the run to stop.
-                                hint(
-                                    button(circle_plus().size(14))
-                                        .style(button::text)
-                                        .padding(4)
-                                        .on_press_maybe(match self.rig_editable() {
-                                            true => add,
-                                            false => None,
-                                        }),
-                                    "Add a channel to this device",
-                                ),
-                            ]
-                            .align_y(Center);
-
-                            let mut entry = column![match device.kind {
-                                DeviceKind::Measured(at) => Element::from(
-                                    MouseArea::new(device_header)
-                                        .on_right_press(Message::ContextOpened(
-                                            ContextMenu::Device(at)
-                                        ))
-                                ),
-                                DeviceKind::Calculated => Element::from(
-                                    MouseArea::new(device_header).on_right_press(
-                                        Message::ContextOpened(ContextMenu::Calculated),
-                                    ),
-                                ),
-                            }];
-
-                            if device.expanded {
-                                entry = entry.push(
-                                    column(device.channels.iter().enumerate().map(
-                                        |(position, channel)| {
-                                            let reading = match channel.latest {
-                                                Some(value) => {
-                                                    format!("{:.3} {}", value, channel.unit)
-                                                }
-                                                None => "—".to_string(),
-                                            };
-
-                                            // The same two questions as the
-                                            // device row, asked of the channel.
-                                            let (selected, press) = match device.kind {
-                                                DeviceKind::Measured(at) => (
-                                                    self.selected
-                                                        == Some(Selection::Channel(at, position)),
-                                                    Message::ChannelSelected(at, position),
-                                                ),
-                                                DeviceKind::Calculated => (
-                                                    self.selected
-                                                        == Some(Selection::CalculatedChannel(
-                                                            position,
-                                                        )),
-                                                    Message::CalculatedChannelSelected(position),
-                                                ),
-                                            };
-
-                                            let row: Element<'_, Message> =
-                                                row![
-                                                    // The icon does the
-                                                    // indenting, so a channel
-                                                    // reads as belonging to
-                                                    // the device above it
-                                                    // without a margin as well.
-                                                    // Which icon says where the
-                                                    // value came from: read in,
-                                                    // or worked out.
-                                                    match device.kind {
-                                                        DeviceKind::Measured(_) =>
-                                                            square_arrow_right().size(11),
-                                                        DeviceKind::Calculated =>
-                                                            square_equal().size(11),
-                                                    },
-                                                    text(&channel.name).size(14),
-                                                    space::horizontal(),
-                                                    // Dressed as a field, since
-                                                    // that is what it is: a
-                                                    // value belonging to this
-                                                    // channel rather than more
-                                                    // of its name.
-                                                    container(text(reading).size(13))
-                                                        .padding([2, 6])
-                                                        .style(|theme: &Theme| container::Style {
-                                                            background: Some(
-                                                                field_colour(theme).into(),
-                                                            ),
-                                                            border: Border {
-                                                                radius: FIELD_RADIUS.into(),
-                                                                width: 1.0,
-                                                                color: theme
-                                                                    .extended_palette()
-                                                                    .background
-                                                                    .weak
-                                                                    .color,
-                                                            },
-                                                            ..container::Style::default()
-                                                        }),
-                                                ]
-                                                // Keeps the name off the
-                                                // reading when the pane is
-                                                // dragged narrow: the flexible
-                                                // space between them goes to
-                                                // nothing, this does not.
-                                                .spacing(8)
-                                                .align_y(Center)
-                                            .into();
-
-                                            let menu = match device.kind {
-                                                DeviceKind::Measured(at) => {
-                                                    ContextMenu::Channel(at, position)
-                                                }
-                                                DeviceKind::Calculated => {
-                                                    ContextMenu::CalculatedChannel(position)
-                                                }
-                                            };
-
-                                            channel_row(
-                                                row,
-                                                match selected {
-                                                    true => RowLook::Picked,
-                                                    false => RowLook::Plain,
-                                                },
-                                                press,
-                                                Message::ContextOpened(menu),
-                                            )
-                                        },
-                                    ))
-                                    .spacing(4)
-                                    // Lined up with the device name above, not
-                                    // merely inboard of it: the chevron is 22
-                                    // wide and the name button pads by 4, so
-                                    // its text starts at 26 - and the row here
-                                    // pads by 4 of its own, leaving 22.
-                                    .padding(padding::left(22)),
-                                );
-                            }
-
-                            entry.into()
-                        }))
-                        .spacing(5);
-
-                    self.pane(
-                        row![text("Devices"), space::horizontal(), add_device_button]
-                            .align_y(Center),
-                        device_list.into(),
-                    )
-                }
-                PaneKind::Config => {
-                    // Absent rather than greyed. A greyed control is worth
-                    // having where its absence would be a surprise - the
-                    // transport buttons keep their places - but nothing is
-                    // owed an explanation for why a recorded run has no delete.
-                    let remove = self.delete_selected().map(|message| {
-                        Element::from(
-                            button(trash_two().size(14))
-                                .style(danger_on_hover)
-                                .padding(4)
-                                .on_press(message),
-                        )
-                    });
-
-                    // Not named `settings`: that is the gear icon's function.
-                    let panel: Element<'_, Message> = match self.selected {
-                        Some(Selection::Plot(index)) => match self.plots.get(index) {
-                            Some(plot) => self.plot_settings(index, plot),
-                            // The selected plot was deleted from under us.
-                            None => text("Nothing selected.").size(14).into(),
-                        },
-                        Some(Selection::AllPlots) => self.all_plots_settings(),
-                        Some(Selection::ViewPlot(index)) => self.view_plot_settings(index),
-                        Some(Selection::Run(run)) => self.run_settings(run),
-                        Some(Selection::RunDevice(run, device)) => {
-                            self.run_device_settings(run, device)
-                        }
-                        Some(Selection::RunChannel(run, device, channel)) => {
-                            self.run_channel_settings(run, device, channel)
-                        }
-                        Some(Selection::Device(index)) => self.device_settings(index),
-                        Some(Selection::Channel(device, channel)) => {
-                            self.channel_settings(device, channel)
-                        }
-                        Some(Selection::Calculated) => self.calculated_settings(),
-                        Some(Selection::CalculatedChannel(channel)) => {
-                            self.calculated_channel_settings(channel)
-                        }
-                        None => {
-                            text("Select a device, channel or plot to configure it.").size(14).into()
-                        }
-                    };
-
-                    self.pane(
-                        row![text("Configuration"), space::horizontal()]
-                            .extend(remove)
-                            .align_y(Center),
-                        panel,
-                    )
-                }
-                PaneKind::Log => {
-                    let samples: usize = self
-                        .devices
-                        .iter()
-                        .flat_map(|device| device.channels.iter())
-                        .map(|channel| channel.samples)
-                        .sum();
-
-                    let chevron = button(match self.log_open {
-                        true => chevron_down().size(14),
-                        false => chevron_right().size(14),
-                    })
-                    .style(button::text)
-                    .padding(2)
-                    .on_press(Message::LogToggled);
-
-                    // Shut, the pane is its heading and nothing else — no rule
-                    // either, since there is nothing under it to divide from.
-                    // The newest line rides along on the bar, so a run can be
-                    // watched without opening it.
-                    if !self.log_open {
-                        let latest = match self.log.last() {
-                            Some(entry) => entry.text.clone(),
-                            None => String::new(),
-                        };
-
-                        return pane_grid::Content::new(self.pane_heading(
-                            row![chevron, text("Log"), text(latest).size(13), space::horizontal()]
-                                // So the newest line reads as a separate thing
-                                // from the title rather than running on from it.
-                                .spacing(12)
-                                // Bottom rather than centre: the line is
-                                // smaller than the title, and centring it
-                                // leaves it floating above the title's
-                                // baseline instead of sitting on it.
-                                .align_y(Bottom),
-                        ))
-                        .style(container::rounded_box);
-                    }
-
-                    let lines = column(self.log.iter().map(|entry| {
-                        // Local time and the date with it. The stamp is kept
-                        // in UTC, which is right for a record and wrong for
-                        // reading: a run either side of midnight otherwise
-                        // shows two times that sort the wrong way by eye.
-                        text(format!(
-                            "{} - {}",
-                            entry.at.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S"),
-                            entry.text
-                        ))
-                        .size(13)
-                        .into()
-                    }))
-                    .spacing(2);
-
-                    return pane_grid::Content::new(
-                        column![
-                            self.pane_heading(
-                                row![
-                                    chevron,
-                                    text("Log"),
-                                    space::horizontal(),
-                                    text(format!("{} samples", samples)).size(14),
-                                ]
-                                .align_y(Center),
-                            ),
-                            pane_rule(),
-                            // Anchored to the bottom so the newest line is the
-                            // one in view, the way a terminal behaves. Cheaper
-                            // and steadier than scrolling there on every line.
-                            scrollable(lines.width(Fill).padding(10))
-                                .anchor_bottom()
-                                .height(Fill),
-                        ]
-                        .width(Fill),
-                    )
-                    .style(container::rounded_box);
-                }
-                PaneKind::Data => {
-                    let add_plot_button = hint(
-                        button(circle_plus())
-                            .style(button::text)
-                            .padding(4)
-                            .on_press(Message::AddPlot),
-                        "Add a plot",
-                    );
-
-                    // Whichever set of plots this mode is about. The panes and
-                    // the plots are swapped together, so a layout arranged for
-                    // watching a rig is still there when recording comes back.
-                    let (panes, plots) = match self.mode {
-                        Mode::Record => (&self.plot_panes, &self.plots),
-                        Mode::View => (&self.view_panes, &self.view_plots),
-                    };
-
-                    // A grid of its own inside this pane. The plots arrange
-                    // against each other; the sidebar is not somewhere a plot
-                    // can be dragged.
-                    let cards = PaneGrid::new(panes, |_pane, number, _maximised| {
-                        let found =
-                            plots.iter().enumerate().find(|(_, plot)| plot.number == *number);
-
-                        match found {
-                            Some((index, plot)) => self.plot_card(index, plot),
-                            // A pane whose plot has gone. Closed on the next
-                            // deletion rather than drawn as an error.
-                            None => pane_grid::Content::new(space::horizontal().width(0)),
-                        }
-                    })
-                    .width(Fill)
-                    .height(Fill)
-                    .spacing(8)
-                    .on_click(Message::PlotClicked)
-                    .on_drag(Message::PlotDragged)
-                    .on_resize(10, Message::PlotsResized);
-
-                    self.pane_filling_pressable(
-                        row![
-                            // The heading is the way to the settings for every
-                            // plot at once, the same as selecting a device is
-                            // the way to its own. A gear beside it would be a
-                            // second way to reach one panel.
-                            text("Data"),
-                            space::horizontal(),
-                            add_plot_button
-                        ]
-                        .align_y(Center),
-                        Message::AllPlotsSelected,
-                        cards.into(),
-                    )
-                }
+                PaneKind::Devices => self.devices_pane(),
+                PaneKind::Config => self.config_pane(),
+                PaneKind::Log => return self.log_pane(),
+                PaneKind::Data => self.data_pane(),
             };
 
             pane_grid::Content::new(content).style(container::rounded_box)
@@ -6443,7 +5666,7 @@ impl AppDaq {
                 screen,
                 opaque(
                     MouseArea::new(
-                        container(opaque(menu(
+                        container(opaque(look::menu(
                             vec![
                                 MenuItem::Entry("New project", Some(Message::ProjectCreated)),
                                 MenuItem::Entry("Load project", Some(Message::ProjectOpened)),
