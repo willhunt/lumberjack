@@ -81,6 +81,20 @@ pub(crate) fn field_error_style(theme: &Theme, status: text_input::Status) -> te
 }
 
 /// Dropdowns, styled to match the text fields beside them.
+/// The same, for a field holding a value that has been tried and did not work.
+///
+/// Only the border changes. Recolouring the whole control would say the value
+/// is unusable, and it may well be right - what is known is that it did not
+/// read this device just now.
+pub(crate) fn field_pick_warning_style(
+    theme: &Theme,
+    status: pick_list::Status,
+) -> pick_list::Style {
+    let mut style = field_pick_style(theme, status);
+    style.border.color = theme.extended_palette().warning.base.color;
+    style
+}
+
 pub(crate) fn field_pick_style(theme: &Theme, status: pick_list::Status) -> pick_list::Style {
     let palette = theme.extended_palette();
     let mut style = pick_list::default(theme, status);

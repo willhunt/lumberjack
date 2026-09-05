@@ -61,6 +61,120 @@ fn default_frame_pattern() -> String {
     r"#([^#$]*)\$".to_string()
 }
 
+/// What listening to a port for a moment found.
+///
+/// The question being answered is narrow: does this configuration read this
+/// device? A baud rate cannot be measured, only tried, so the only honest test
+/// is to open the port and see whether anything readable comes out of it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamCheck {
+    /// A frame arrived and the channels read it. Nothing to complain about.
+    Reads,
+    /// Bytes arrived and none of them completed a frame. Far and away the
+    /// usual cause is a baud rate that does not match the device, though a
+    /// frame pattern describing a different protocol looks the same.
+    Unreadable,
+    /// Frames arrived and matched, and the channels could not read them.
+    /// The stream really is frames - see `ENOUGH_FRAMES` - so the rate is
+    /// right and the fault is a channel pointing at a field that is not
+    /// there or is not a number.
+    Mismatched { reason: String },
+    /// The port opened and nothing came out of it at all.
+    Silent,
+}
+
+/// Listen to a port for a moment and say whether the configuration reads it.
+///
+/// Opens the port, so it cannot be used while a run has it, and it asserts DTR
+/// on the way in - which resets an Arduino and most boards like it. That is
+/// tolerable for something somebody asked for by pressing a button, and is why
+/// this is not on a timer. It also means `patience` has to outlast a bootloader
+/// or the only thing heard will be the silence after the reset.
+///
+/// Returns the moment one frame reads, so a working device answers quickly and
+/// only a broken one waits out the whole patience.
+pub fn check_stream(config: &SerialStreamConfig, patience: Duration) -> Result<StreamCheck> {
+    let pattern = Regex::new(&config.frame_pattern).map_err(|error| {
+        Error::InvalidFramePattern {
+            pattern: config.frame_pattern.clone(),
+            port: config.port.clone(),
+            source: error,
+        }
+    })?;
+
+    let mut port = serialport::new(&config.port, config.baudrate)
+        .timeout(Duration::from_millis(100))
+        .open()?;
+
+    let deadline = Instant::now() + patience;
+    let mut buffer = String::new();
+    let mut bytes = [0u8; 4096];
+    let mut mismatch: Option<String> = None;
+    // Weighed rather than counted. One frame among a hundred kilobytes of
+    // noise and one frame among a hundred kilobytes of frames are the same
+    // number and completely different answers.
+    let mut heard_bytes = 0usize;
+    let mut frame_bytes = 0usize;
+
+    while Instant::now() < deadline {
+        let count = match port.read(&mut bytes) {
+            Ok(0) => continue,
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
+            // The port has gone mid-check. Whatever was heard before that is
+            // still the best answer available, and reporting a read error
+            // instead would bury it.
+            Err(_) => break,
+        };
+
+        // Measured after the lossy conversion, as the frames below are, so
+        // the two are the same units: an invalid byte becomes a three byte
+        // replacement character and would otherwise count as one.
+        let arrived = String::from_utf8_lossy(&bytes[..count]);
+        heard_bytes += arrived.len();
+        buffer.push_str(&arrived);
+
+        while let Some(frame) = take_next_frame(&mut buffer, &pattern) {
+            frame_bytes += frame.len();
+            match parse_frame_values(&frame, &config.channels) {
+                // One frame that reads settles it. Holding the port for the
+                // rest of the patience would prove nothing further.
+                Ok(_) => return Ok(StreamCheck::Reads),
+                Err(error) => {
+                    mismatch.get_or_insert_with(|| error.to_string());
+                }
+            }
+        }
+
+        if buffer.len() > MAX_BUFFER_BYTES {
+            buffer.clear();
+        }
+    }
+
+    Ok(verdict(heard_bytes, frame_bytes, mismatch))
+}
+
+/// Judge what a spell of listening added up to.
+///
+/// Split from the listening so the arithmetic can be tested without a port.
+/// Choosing between "the rate is wrong" and "a channel is wrong" is the whole
+/// value of the check, and it is the part that was wrong the first time: a
+/// single accidental match was taken as proof the rate was right.
+fn verdict(heard_bytes: usize, frame_bytes: usize, mismatch: Option<String>) -> StreamCheck {
+    // Frames that would not read only say something about the channels if the
+    // stream was mostly frames to begin with. Otherwise they are noise finding
+    // the pattern by accident, and the answer is the same as if they had never
+    // matched at all.
+    let mostly_frames =
+        heard_bytes > 0 && frame_bytes as f64 / heard_bytes as f64 >= ENOUGH_FRAMES;
+
+    match (heard_bytes > 0, mismatch) {
+        (true, Some(reason)) if mostly_frames => StreamCheck::Mismatched { reason },
+        (true, _) => StreamCheck::Unreadable,
+        (false, _) => StreamCheck::Silent,
+    }
+}
+
 /// A serial port that is plugged in at the moment.
 ///
 /// Enough to choose one by: `COM7` alone is no help when three things are
@@ -155,6 +269,20 @@ const FIELD_SEPARATOR: char = ',';
 /// the stream and we are just accumulating noise. Better to drop it than to
 /// grow without bound for the rest of the run.
 const MAX_BUFFER_BYTES: usize = 64 * 1024;
+
+/// How much of what arrives must be frames before a frame that will not read
+/// is taken as a channel problem rather than a coincidence.
+///
+/// At the right baud rate a stream is almost entirely frames. At the wrong one
+/// it is noise, and noise throws up the occasional accidental match: `#` and
+/// `$` each turn up about once in every 256 random bytes, so a pattern looking
+/// for one either side of some text finds one soon enough. Treating that as
+/// "the rate is right and a channel is wrong" is exactly how a wrong rate
+/// escapes without a warning.
+///
+/// A quarter is far below what a real stream manages and far above what
+/// coincidence produces, so nothing delicate rests on the figure.
+const ENOUGH_FRAMES: f64 = 0.25;
 
 /// How long bytes may keep arriving without completing a single frame before
 /// the device says something is wrong.
@@ -837,6 +965,35 @@ mod tests {
         // Counted once. The complaint stands, but on the strength of the same
         // bufferful rather than being renewed by it.
         assert_eq!(device.unmatched.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn frames_that_will_not_read_blame_the_channels_only_when_the_stream_is_frames() {
+        // The right rate: nearly everything that arrives is a frame, so a
+        // frame the channels cannot read is about the channels.
+        assert_eq!(
+            verdict(1000, 900, Some("field 3 is not a number".to_string())),
+            StreamCheck::Mismatched { reason: "field 3 is not a number".to_string() }
+        );
+    }
+
+    #[test]
+    fn one_lucky_match_in_a_sea_of_noise_still_blames_the_rate() {
+        // The wrong rate, and the case that got through the first time: `#`
+        // and `$` turn up in noise often enough that the pattern eventually
+        // matches something, and that match proves nothing.
+        assert_eq!(
+            verdict(60_000, 40, Some("field 3 is not a number".to_string())),
+            StreamCheck::Unreadable
+        );
+    }
+
+    #[test]
+    fn bytes_that_never_match_are_the_rate_and_no_bytes_at_all_are_neither() {
+        assert_eq!(verdict(60_000, 0, None), StreamCheck::Unreadable);
+        // Nothing arrived, which says nothing about the settings: the device
+        // may simply have nothing to say yet.
+        assert_eq!(verdict(0, 0, None), StreamCheck::Silent);
     }
 
     #[test]

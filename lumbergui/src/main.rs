@@ -36,6 +36,7 @@ use lumberdaq::datapoint::DataPoint;
 // for a run in progress, and a mock device's way of sampling is a different
 // thing that happens to share the word.
 use lumberdaq::hardware::mock_hardware::{self, MockHardwareInput};
+use lumberdaq::hardware::serial_stream::StreamCheck;
 use lumberdaq::hardware::{pico_hrdl, serial_stream};
 use lumberdaq::hardware::HardwareConfig;
 use lumberdaq::plot_config::{self, PlotLayout, SplitAxis};
@@ -612,6 +613,12 @@ struct Answered {
 /// rig where every device is fine look exactly alike.
 type Checked = Result<Vec<Answered>, String>;
 
+/// The verdict on one device's settings, and which device it was about.
+///
+/// The error is a message rather than the error itself, because it has to
+/// cross a thread and `Error` is not `Send`.
+type Tested = (usize, Result<StreamCheck, String>);
+
 /// Which device in the setup a row of the tree stands for.
 ///
 /// Calculated channels are a device in the results and in the config, but they
@@ -704,6 +711,17 @@ impl std::fmt::Display for NiRange {
 
 /// The speeds a serial device is likely to be running at.
 const BAUD_RATES: [u32; 8] = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
+
+/// How long to listen to a port before deciding the settings do not read it.
+///
+/// Longer than it sounds like it needs to be, and for a reason: opening a port
+/// asserts DTR, which resets an Arduino, and its bootloader takes a second or
+/// two before the sketch says anything at all. A shorter patience would hear
+/// only the silence after the reset and blame the baud rate for it.
+///
+/// Costs nothing when the settings are right - the test returns the moment one
+/// frame reads - so this is only how long a failure takes to be sure of.
+const STREAM_TEST_PATIENCE: Duration = Duration::from_secs(5);
 
 /// How often a streaming mock device produces a sample, to choose between.
 const MOCK_INTERVALS: [u64; 9] = [1, 2, 5, 10, 20, 50, 100, 500, 1000];
@@ -1248,6 +1266,16 @@ struct AppDaq {
     pico_inputs: Option<u16>,
     /// A check of every device, while it is on its way.
     connection_check: Option<Receiver<Checked>>,
+    /// A baud rate being tried against a device, while it is on its way.
+    connection_test: Option<Receiver<Tested>>,
+    /// A test asked for while the hardware was busy with another check.
+    wanted_test: Option<usize>,
+    /// What the last test made of a device's settings, and which device.
+    ///
+    /// One at a time, because one device is configured at a time. Kept with
+    /// its index so a verdict cannot be shown against a device it was not
+    /// about.
+    tested: Option<(usize, StreamCheck)>,
     /// A check asked for while that one was still running.
     ///
     /// Trying ports one after another asks for a check faster than the
@@ -1293,6 +1321,8 @@ enum Message {
     ModeChosen(Mode),
     RunsRefreshed,
     ConnectionsChecked,
+    /// Try the current settings against the device on this row.
+    StreamTested(usize),
     /// Windows says something was plugged in or unplugged.
     DevicesChanged,
     ToggleRun(usize),
@@ -1440,6 +1470,9 @@ impl AppDaq {
             pico_inputs: None,
             connection_check: None,
             wanted_check: None,
+            connection_test: None,
+            wanted_test: None,
+            tested: None,
             pico_probe: None,
             model: None,
             adding_device: None,
@@ -1767,6 +1800,7 @@ impl AppDaq {
             }
             Message::RunsRefreshed => self.load_runs(),
             Message::ConnectionsChecked => self.check_connections(),
+            Message::StreamTested(index) => self.test_stream(index),
             Message::DevicesChanged => {
                 // Said whether or not it leads to a check, because "something
                 // was plugged in" is itself worth having in a log: it dates a
@@ -2690,6 +2724,11 @@ impl AppDaq {
                 {
                     serial.baudrate = baudrate;
                     self.rig_changed();
+
+                    // Picking a rate is asking whether it is the right one,
+                    // and the answer takes seconds to get, so start now
+                    // rather than waiting to be asked a second time.
+                    self.test_stream(index);
                 }
             }
             Message::SerialPatternEdited(index, pattern) => {
@@ -2970,6 +3009,7 @@ impl AppDaq {
                 self.reap_stopped_run();
                 self.collect_pico_probe();
                 self.collect_connection_check();
+                self.collect_stream_test();
 
                 // Slid every frame whether or not anything arrived, which is
                 // what keeps the scroll smooth while the data stays honest.
@@ -3020,7 +3060,7 @@ impl AppDaq {
         // One at a time: two threads opening the same port would have the
         // second fail for no reason but the first, and report a red dot for
         // a device that is sitting there working.
-        if self.connection_check.is_some() {
+        if self.connection_check.is_some() || self.connection_test.is_some() {
             self.wanted_check = Some(match self.wanted_check.take() {
                 // Two different devices changed while one check ran. Rather
                 // than choose between them, ask about everything.
@@ -3068,6 +3108,118 @@ impl AppDaq {
         self.connection_check = Some(receiver);
     }
 
+    /// Try a device's settings against the hardware and see if they read it.
+    ///
+    /// A baud rate cannot be worked out by asking, only by listening, so this
+    /// opens the port and waits to hear something the config can read. On a
+    /// thread for the same reason as everything else that touches hardware:
+    /// the patience below is seconds, and a window that stops drawing for that
+    /// long looks broken.
+    fn test_stream(&mut self, index: usize) {
+        if self.run != RunState::Stopped {
+            return;
+        }
+
+        // The old verdict is about settings that may no longer be the ones on
+        // screen, and a stale warning border is worse than none. Before the
+        // queueing below, so a test that has to wait its turn does not leave
+        // the last answer showing in the meantime.
+        self.tested = None;
+
+        // Both open ports. Two things opening one port has the second fail on
+        // the first, which would be reported as a device that is not there.
+        if self.connection_check.is_some() || self.connection_test.is_some() {
+            self.wanted_test = Some(index);
+            return;
+        }
+
+        let Some(device) = self.config.devices.get(index) else { return };
+        let HardwareConfig::SerialStream(serial) = &device.hardware else { return };
+
+        let config = serial.clone();
+        let (sender, receiver) = mpsc::channel();
+
+        thread::spawn(move || {
+            let found = serial_stream::check_stream(&config, STREAM_TEST_PATIENCE)
+                .map_err(|problem| problem.to_string());
+            let _ = sender.send((index, found));
+        });
+
+        self.connection_test = Some(receiver);
+        self.note("listening to the port".to_string());
+    }
+
+    /// Take the verdict, if the test has finished.
+    fn collect_stream_test(&mut self) {
+        // Not an early return on there being no test in flight: a test can be
+        // waiting on the *connection* check instead, and that leaves nothing
+        // here to collect while still leaving something to start.
+        if let Some(test) = self.connection_test.as_ref() {
+            match test.try_recv() {
+            Ok((index, found)) => {
+                self.connection_test = None;
+
+                let name = match self.config.devices.get(index) {
+                    Some(device) => device.info.name.clone(),
+                    None => return,
+                };
+
+                match found {
+                    Ok(check) => {
+                        self.note(match &check {
+                            StreamCheck::Reads => format!("{} reads at these settings", name),
+                            StreamCheck::Unreadable => format!(
+                                "{} is sending something, but none of it matches the frame                                  pattern - the baud rate is the usual reason",
+                                name
+                            ),
+                            StreamCheck::Mismatched { reason } => format!(
+                                "{} is sending frames the channels cannot read: {}",
+                                name, reason
+                            ),
+                            StreamCheck::Silent => {
+                                format!("{} sent nothing at all", name)
+                            }
+                        });
+                        // The dot says the same thing as the border, so
+                        // the two cannot disagree about one device. Only the
+                        // verdict that colours the box: a frame the channels
+                        // cannot read is a channel fault, and pointing at the
+                        // device for it would send somebody to the wrong
+                        // place twice over.
+                        if let Some(found) =
+                            self.devices.iter_mut().find(|found| found.name == name)
+                        {
+                            // The port opened, so whatever else is wrong, it
+                            // is there.
+                            found.connected = Some(true);
+                            found.concern = match &check {
+                                StreamCheck::Unreadable => {
+                                    Some("nothing it sends matches the frame pattern".to_string())
+                                }
+                                _ => None,
+                            };
+                        }
+
+                        self.tested = Some((index, check));
+                    }
+                    // Not being able to open the port is a different failure,
+                    // and saying the baud rate is wrong would send somebody
+                    // after the wrong thing entirely.
+                    Err(problem) => self.note(format!("could not listen to {}: {}", name, problem)),
+                }
+            }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => self.connection_test = None,
+            }
+        }
+
+        // Only once nothing else has the port.
+        if self.connection_test.is_none() && self.connection_check.is_none() {
+            if let Some(index) = self.wanted_test.take() {
+                self.test_stream(index);
+            }
+        }
+    }
 
     /// Take the answer, if the check has finished.
     fn collect_connection_check(&mut self) {
@@ -3397,6 +3549,17 @@ impl AppDaq {
         self.available = self.config.available_inputs();
         self.plottable = self.config.all_channels();
         self.rig_dirty_since = Some(Instant::now());
+        // A verdict is about the settings that were tried. Any edit may have
+        // changed them, and a warning border left over from settings nobody
+        // can see any more is worse than no border at all. The dot goes with
+        // it, or the two would disagree about the same device.
+        //
+        // Safe to clear the concerns here because the rig can only be edited
+        // while stopped, so none of them can be from a run in progress.
+        self.tested = None;
+        for device in self.devices.iter_mut() {
+            device.concern = None;
+        }
     }
 
     /// Write the configuration out, if it has settled since the last change.
@@ -3623,7 +3786,9 @@ impl AppDaq {
         // A thread that will have an answer shortly is a third reason: without
         // this the answer would sit in the channel until something else woke
         // the interface up.
-        let asking = self.pico_probe.is_some() || self.connection_check.is_some();
+        let asking = self.pico_probe.is_some()
+            || self.connection_check.is_some()
+            || self.connection_test.is_some();
         if reading || owed || asking || settling {
             listening.push(window::frames().map(|_| Message::Tick));
         }
@@ -4722,11 +4887,26 @@ impl AppDaq {
             bauds.sort_unstable();
         }
 
+        // Only `Unreadable` colours the box. Bytes arriving that make no
+        // sense is the signature of a wrong rate; a frame that matched but
+        // would not read proves the rate is *right* and the fault is a
+        // channel; and silence proves nothing at all.
+        let baud_is_wrong = matches!(
+            &self.tested,
+            Some((tested, StreamCheck::Unreadable)) if *tested == index
+        );
+        // Through a function pointer because the two are different types until
+        // they are coerced, and a `match` needs them to be one type.
+        let baud_style: fn(&Theme, pick_list::Status) -> pick_list::Style = match baud_is_wrong {
+            true => field_pick_warning_style,
+            false => field_pick_style,
+        };
+
         let baud: Element<'_, Message> = match self.rig_editable() {
             true => pick_list(bauds, Some(serial.baudrate), move |baudrate| {
                 Message::SerialBaudChosen(index, baudrate)
             })
-            .style(field_pick_style)
+            .style(baud_style)
             .text_size(14)
             .width(Fill)
             .into(),
@@ -4757,7 +4937,43 @@ impl AppDaq {
                 true => text("No serial ports found.").size(13),
                 false => text(format!("{} port(s) found", self.ports.len())).size(13),
             },
-            column![field_label("Baud rate"), baud].spacing(2),
+            column![
+                field_label("Baud rate"),
+                // Beside the list for the same reason the refresh is beside
+                // the ports: a rate cannot be worked out by looking, only by
+                // trying, so the way to find out is right where it is set.
+                row![
+                    baud,
+                    hint(
+                        // A different mark while it listens, because five
+                        // seconds of a button that looks exactly as it did
+                        // before reads as a button that did nothing.
+                        button(
+                            match self.connection_test.is_some() {
+                                true => loader_pinwheel(),
+                                false => check(),
+                            }
+                            .size(14)
+                        )
+                            .style(button::text)
+                            .padding(4)
+                            // Nothing while a run owns the port, or while the
+                            // last test is still listening to it.
+                            .on_press_maybe(
+                                match self.run == RunState::Stopped
+                                    && self.connection_test.is_none()
+                                {
+                                    true => Some(Message::StreamTested(index)),
+                                    false => None,
+                                }
+                            ),
+                        "Listen to the port and see whether these settings read it",
+                    ),
+                ]
+                .spacing(4)
+                .align_y(Center),
+            ]
+            .spacing(2),
             // Free text because it is a regular expression: there is no list
             // of the right answers, and the one in the config may be anything.
             self.rig_field("Frame pattern", &serial.frame_pattern, move |pattern| {
