@@ -5652,7 +5652,7 @@ impl AppDaq {
                     .into(),
                 };
 
-                let (selected, press, add) = match device.kind {
+                let (selected, press, _add) = match device.kind {
                     DeviceKind::Measured(at) => (
                         self.selected == Some(Selection::Device(at)),
                         Message::DeviceSelected(at),
