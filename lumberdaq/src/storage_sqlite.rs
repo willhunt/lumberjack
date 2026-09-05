@@ -50,6 +50,30 @@ pub struct SqliteSink {
 /// missing column. Bump it whenever the tables change.
 pub(crate) const SCHEMA_VERSION: i32 = 6;
 
+/// The oldest schema this build can still read.
+///
+/// Writing and reading want different things of a file, and conflating them
+/// makes every old recording unreadable the moment this number moves. A run
+/// is appended to, so writing needs the schema it expects, exactly. Reading
+/// needs only the columns it selects to be there — and every version since 2
+/// has them, because what changed after that was columns going away that
+/// nothing reads.
+///
+/// What each version did, and whether a reader can live with it:
+///
+/// | Version | Change                                    | Readable now |
+/// |---------|-------------------------------------------|--------------|
+/// | 1       | the first sink                            | no: no `devices.hardware` |
+/// | 2       | recorded each device's configuration      | yes |
+/// | 3       | one timestamp per reading                 | yes |
+/// | 4       | per channel scaling                       | yes |
+/// | 5       | dropped `devices.description`             | yes |
+/// | 6       | dropped `channels.description`            | yes |
+///
+/// Raise this only when a change genuinely stops an older file being read.
+/// Extra columns are harmless: every query names the columns it wants.
+pub(crate) const READABLE_FROM: i32 = 2;
+
 impl SqliteSink {
     pub fn new(path: &Path) -> Result<SqliteSink> {
         let connection = Connection::open(path)?;

@@ -172,6 +172,9 @@ pub enum Error {
     #[error("this results database uses schema version {found}, but this build writes version {expected}; record to a new file, or delete the old one")]
     DatabaseSchemaVersion { found: i32, expected: i32 },
 
+    #[error("this results database uses schema version {found}, which is older than any this build can read (from {oldest}); it was recorded by a version of lumberjack too old for this one")]
+    DatabaseTooOld { found: i32, oldest: i32 },
+
     // ---- Serial framing and parsing ----------------------------------------
     #[error("frame pattern '{pattern}' for serial port {port} is not a valid regular expression")]
     InvalidFramePattern {

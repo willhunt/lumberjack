@@ -62,12 +62,26 @@ impl Archive {
         )?;
 
         // Checked here rather than met as a missing column three queries
-        // later. The writer refuses a file it did not write the schema of, and
-        // a reader that quietly tried anyway would report whichever column
-        // happened to be missing instead of the actual problem.
+        // later, which would report whichever column happened to be absent
+        // instead of the actual problem.
+        //
+        // A range, not a match. Reading an older recording is the whole point
+        // of a viewer: those files are records of experiments that cannot be
+        // taken again, and refusing them because a column somebody never reads
+        // was dropped afterwards would be losing them for nothing. See
+        // `READABLE_FROM` for what each version changed.
         let found: i32 =
             connection.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap_or(0);
-        if found != crate::storage_sqlite::SCHEMA_VERSION {
+
+        if found < crate::storage_sqlite::READABLE_FROM {
+            return Err(crate::Error::DatabaseTooOld {
+                found,
+                oldest: crate::storage_sqlite::READABLE_FROM,
+            });
+        }
+        // Newer than us is a different problem: we cannot know what changed,
+        // so guessing is worse than saying so.
+        if found > crate::storage_sqlite::SCHEMA_VERSION {
             return Err(crate::Error::DatabaseSchemaVersion {
                 found,
                 expected: crate::storage_sqlite::SCHEMA_VERSION,
@@ -265,17 +279,86 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    #[test]
-    fn a_file_from_an_older_lumberjack_is_refused_by_name() {
-        let path = scratch("old_schema");
-        {
-            let old = rusqlite::Connection::open(&path).expect("a file should be creatable");
-            old.pragma_update(None, "user_version", 5).expect("a version should be settable");
-        }
+    /// A results file as version 2 wrote one: the oldest shape this build
+    /// claims to read, with the columns that have since gone away still in it.
+    fn old_schema(path: &Path, version: i32) {
+        let old = rusqlite::Connection::open(path).expect("a file should be creatable");
+        old.execute_batch(
+            "CREATE TABLE runs (
+                 id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+                 author TEXT NOT NULL, started TEXT NOT NULL);
+             CREATE TABLE devices (
+                 id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL,
+                 name TEXT NOT NULL, description TEXT NOT NULL,
+                 hardware TEXT NOT NULL);
+             CREATE TABLE channels (
+                 id INTEGER PRIMARY KEY, device_id INTEGER NOT NULL,
+                 hardware_id TEXT NOT NULL, name TEXT NOT NULL,
+                 unit TEXT NOT NULL, description TEXT NOT NULL);
+             CREATE TABLE readings (
+                 channel_id INTEGER NOT NULL, timestamp INTEGER NOT NULL,
+                 value REAL NOT NULL);
 
-        let refused = Archive::open(&path).expect_err("an older file should be refused");
+             INSERT INTO runs VALUES (1, 'Old', 'Test', '2020-01-01T00:00:00+00:00');
+             INSERT INTO devices VALUES (1, 1, 'Rig', 'a description', '{\"type\":\"MockHardware\"}');
+             INSERT INTO channels VALUES (1, 1, 'ai0', 'Flow', 'L/min', 'a description');
+             INSERT INTO readings VALUES (1, 1577836800000000, 4.5);",
+        )
+        .expect("the old schema should build");
+
+        old.pragma_update(None, "user_version", version).expect("a version should be settable");
+    }
+
+    #[test]
+    fn a_recording_from_an_older_version_still_reads() {
+        // The point of the whole exercise: those files are records of
+        // experiments that cannot be taken again, and the columns dropped
+        // since are ones nothing here ever selected.
+        let path = scratch("version_2");
+        old_schema(&path, 2);
+
+        let archive = Archive::open(&path).expect("version 2 should still be readable");
+        let runs = archive.runs().expect("runs should read");
+        assert_eq!(runs.len(), 1);
+
+        let devices = archive.devices(runs[0].id).expect("devices should read");
+        assert_eq!(devices[0].name, "Rig");
+
+        let channels = archive.channels(devices[0].id).expect("channels should read");
+        assert_eq!(channels[0].unit, "L/min");
+
+        let readings = archive.readings(channels[0].id).expect("readings should read");
+        assert_eq!(readings.len(), 1);
+        assert_eq!(readings[0].value, 4.5);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_recording_older_than_we_can_read_is_refused_by_name() {
+        let path = scratch("version_1");
+        old_schema(&path, 1);
+
+        let refused = Archive::open(&path).expect_err("version 1 should be refused");
         assert!(
-            matches!(refused, crate::Error::DatabaseSchemaVersion { found: 5, .. }),
+            matches!(refused, crate::Error::DatabaseTooOld { found: 1, oldest: 2 }),
+            "{}",
+            refused
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_recording_from_a_newer_version_is_refused_too() {
+        // Not the same problem: what changed is unknown, so reading it anyway
+        // would be guessing.
+        let path = scratch("version_99");
+        old_schema(&path, 99);
+
+        let refused = Archive::open(&path).expect_err("a newer file should be refused");
+        assert!(
+            matches!(refused, crate::Error::DatabaseSchemaVersion { found: 99, .. }),
             "{}",
             refused
         );
