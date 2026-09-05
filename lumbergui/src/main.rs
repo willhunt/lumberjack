@@ -153,6 +153,33 @@ fn default_panes() -> pane_grid::State<PaneKind> {
     })
 }
 
+/// Whether the calculated channels all build, in the form the dot wants.
+///
+/// `Some(false)` - a red dot - when any equation will not compile, and `None`
+/// when they all do. A calculated device is worked out rather than read, so it
+/// has nothing to be connected *to*: a healthy one draws no dot at all and
+/// only trouble is worth the ink.
+///
+/// Worth an alarm because of the shape of the failure. A channel whose
+/// equation is wrong is not refused when the run starts - the run starts
+/// perfectly well and that channel silently produces nothing, which looks
+/// exactly like hardware that is not sending. The panel says what is wrong
+/// once the channel is selected; this is what sends somebody to look.
+fn calculated_health(config: &DaqConfig) -> Option<bool> {
+    let calculated = config.calculated.as_ref()?;
+
+    calculated
+        .channels
+        .iter()
+        // An equation nobody has written yet is unfinished, not wrong. A
+        // channel is added with an empty one on purpose, so judging those
+        // would turn the device red the moment somebody made a channel and
+        // before they had typed a character into it.
+        .filter(|channel| !channel.equation.trim().is_empty())
+        .any(|channel| channel.validate().is_err())
+        .then_some(false)
+}
+
 fn devices_from(config: &DaqConfig) -> Vec<AppDevice> {
     let measured = config.devices.iter().enumerate().map(|(index, device)| AppDevice {
         name: device.info.name.clone(),
@@ -194,9 +221,7 @@ fn devices_from(config: &DaqConfig) -> Vec<AppDevice> {
             .collect(),
         expanded: true,
         kind: DeviceKind::Calculated,
-        // Worked out rather than read, so there is nothing for it to be
-        // connected to and no dot to draw.
-        connected: None,
+        connected: calculated_health(config),
         concern: None,
     });
 
@@ -3616,6 +3641,16 @@ impl AppDaq {
         self.available = self.config.available_inputs();
         self.plottable = self.config.all_channels();
         self.rig_dirty_since = Some(Instant::now());
+
+        // Judged here rather than while drawing. Compiling every equation is
+        // cheap once per edit and wasteful sixty times a second, and an
+        // equation only changes by an edit.
+        let calculated = calculated_health(&self.config);
+        if let Some(device) =
+            self.devices.iter_mut().find(|device| device.kind == DeviceKind::Calculated)
+        {
+            device.connected = calculated;
+        }
         // A verdict is about the settings that were tried. Any edit may have
         // changed them, and a warning border left over from settings nobody
         // can see any more is worse than no border at all. The dot goes with
@@ -6514,5 +6549,78 @@ impl Drop for AppDaq {
         if let Some(acquisition) = self.acquisition.as_ref() {
             acquisition.stop.store(true, Ordering::Relaxed);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lumberdaq::calculated::{CalculatedChannel, CalculatedDevice};
+    use lumberdaq::channel::ChannelInfo;
+    use lumberdaq::device::DeviceInfo;
+    use std::collections::BTreeMap;
+
+    /// A setup whose calculated channels carry the given equations, each
+    /// declaring one input called `v`.
+    fn with_equations(equations: &[&str]) -> DaqConfig {
+        let mut inputs = BTreeMap::new();
+        inputs.insert(
+            "v".to_string(),
+            ChannelRef {
+                device: "Signal generator".to_string(),
+                channel: "sine".to_string(),
+            },
+        );
+
+        DaqConfig {
+            info: DaqInfo { name: "a project".to_string(), author: String::new() },
+            devices: vec![],
+            calculated: Some(CalculatedDevice {
+                info: DeviceInfo { name: "Calculated".to_string() },
+                channels: equations
+                    .iter()
+                    .enumerate()
+                    .map(|(index, equation)| CalculatedChannel {
+                        info: ChannelInfo {
+                            name: format!("channel {}", index),
+                            ..Default::default()
+                        },
+                        inputs: inputs.clone(),
+                        equation: equation.to_string(),
+                    })
+                    .collect(),
+            }),
+        }
+    }
+
+    #[test]
+    fn equations_that_build_leave_the_calculated_device_with_no_dot() {
+        // It is worked out rather than read, so there is nothing for it to be
+        // connected to and a healthy one says nothing at all.
+        assert_eq!(calculated_health(&with_equations(&["v * 2"])), None);
+    }
+
+    #[test]
+    fn an_equation_that_will_not_build_shows_the_device_as_down() {
+        // `w` is not among the declared inputs. The failure this is here to
+        // catch: it loads, the run starts, and the channel silently produces
+        // nothing, which looks exactly like hardware that is not sending.
+        assert_eq!(calculated_health(&with_equations(&["w * 2"])), Some(false));
+    }
+
+    #[test]
+    fn an_equation_nobody_has_written_yet_is_not_an_error() {
+        // A channel is added with an empty equation on purpose, so going red
+        // before somebody has typed a character would be crying wolf.
+        assert_eq!(calculated_health(&with_equations(&["", "v * 2"])), None);
+        // One that is written and wrong still counts, whatever it sits beside.
+        assert_eq!(calculated_health(&with_equations(&["", "w * 2"])), Some(false));
+    }
+
+    #[test]
+    fn a_setup_with_no_calculated_device_has_nothing_to_judge() {
+        let mut config = with_equations(&[]);
+        config.calculated = None;
+        assert_eq!(calculated_health(&config), None);
     }
 }
