@@ -30,6 +30,20 @@ fn remove_at<T>(channels: &mut Vec<T>, index: usize) -> bool {
 
 pub trait HardwareDataAquisition {
     fn read(&mut self) -> Result<Vec<Vec<DataPoint>>>;
+
+    /// Something wrong that is not bad enough to fail a read.
+    ///
+    /// A device can be connected, returning data, and still have something to
+    /// say - frames it had to skip, a stream that does not look like what the
+    /// config claims. That is not an error, because erroring would throw away
+    /// the good data alongside the bad, and it is not silence either.
+    ///
+    /// State rather than an event: it stands until the hardware is happy
+    /// again, so a caller can show it for as long as it is true. Most hardware
+    /// has nothing to say, hence the default.
+    fn concern(&self) -> Option<String> {
+        None
+    }
 }
 
 /// How a piece of hardware is described in a config file.
@@ -362,6 +376,19 @@ impl HardwareDataAquisition for Hardware {
             Hardware::NiDaqmx(device) => device.read(),
             Hardware::SerialStream(device) => device.read(),
             Hardware::None => Err(Error::NoHardware)
+        }
+    }
+
+    fn concern(&self) -> Option<String> {
+        match self {
+            Hardware::SerialStream(device) => device.concern(),
+            // Spelled out rather than left to a wildcard, so adding a backend
+            // that has something to say is a compile error rather than a
+            // silence nobody notices.
+            Hardware::MockHardware(_)
+            | Hardware::PicoHrdl(_)
+            | Hardware::NiDaqmx(_)
+            | Hardware::None => None,
         }
     }
 }

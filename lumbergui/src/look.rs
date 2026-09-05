@@ -505,9 +505,14 @@ pub(crate) const DOT: f32 = 8.0;
 /// Directly after the name rather than at the end of the row: it belongs to
 /// the name, and a column of dots down the right hand edge would read as a
 /// separate thing to scan.
-pub(crate) fn connection_dot<'a>(connected: Option<bool>) -> Element<'a, Message> {
-    let Some(connected) = connected else {
-        return space::horizontal().width(0).into();
+pub(crate) fn connection_dot<'a>(health: Health) -> Element<'a, Message> {
+    let colour = match health {
+        // Nothing has looked, so there is nothing to say. A dot in any colour
+        // would be an answer, and the honest one is no dot at all.
+        Health::Unknown => return space::horizontal().width(0).into(),
+        Health::Fine => |palette: &iced::theme::palette::Extended| palette.success.base.color,
+        Health::Troubled => |palette: &iced::theme::palette::Extended| palette.warning.base.color,
+        Health::Down => |palette: &iced::theme::palette::Extended| palette.danger.base.color,
     };
 
     // A drawn circle rather than a text glyph. A glyph sits where the font
@@ -521,18 +526,29 @@ pub(crate) fn connection_dot<'a>(connected: Option<bool>) -> Element<'a, Message
             let palette = theme.extended_palette();
 
             container::Style {
-                background: Some(
-                    match connected {
-                        true => palette.success.base.color,
-                        false => palette.danger.base.color,
-                    }
-                    .into(),
-                ),
+                background: Some(colour(palette).into()),
                 border: Border { radius: (DOT / 2.0).into(), ..Border::default() },
                 ..container::Style::default()
             }
         })
         .into()
+}
+
+/// How a device is doing, as far as anything has looked.
+///
+/// Four states rather than a `bool`, because "nobody has tried" and "tried and
+/// failed" are different answers, and so are "reading" and "reading, but".
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Health {
+    /// Nothing has tried yet.
+    Unknown,
+    /// Tried, and it is not there.
+    Down,
+    /// Reading, with something to complain about: frames it cannot use, or a
+    /// stream that does not look like the config says. Amber rather than red
+    /// because data is still arriving and calling that broken would be wrong.
+    Troubled,
+    Fine,
 }
 
 /// One of the marks, drawn at a given size.

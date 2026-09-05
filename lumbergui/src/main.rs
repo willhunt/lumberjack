@@ -171,6 +171,7 @@ fn devices_from(config: &DaqConfig) -> Vec<AppDevice> {
         expanded: true,
         kind: DeviceKind::Measured(index),
         connected: None,
+        concern: None,
     });
 
     // Last, and in the same list rather than beside it: it is a device to
@@ -194,6 +195,7 @@ fn devices_from(config: &DaqConfig) -> Vec<AppDevice> {
         // Worked out rather than read, so there is nothing for it to be
         // connected to and no dot to draw.
         connected: None,
+        concern: None,
     });
 
     measured.chain(calculated).collect()
@@ -497,6 +499,25 @@ struct AppDevice {
     /// `None` before a run: not knowing is a third state, and drawing a red
     /// dot for it would say the device is broken when nothing has looked.
     connected: Option<bool>,
+    /// What it is complaining about, if anything.
+    ///
+    /// Set from two places: a run, where the device says so as it reads, and
+    /// a stream test, which listens to a stopped device on purpose. The plain
+    /// connection check never sets it - it opens the device and lets go
+    /// without reading, so there is nothing for it to find.
+    concern: Option<String>,
+}
+
+impl AppDevice {
+    /// The one answer the dot beside the name is drawn from.
+    fn health(&self) -> Health {
+        match (self.connected, self.concern.is_some()) {
+            (None, _) => Health::Unknown,
+            (Some(false), _) => Health::Down,
+            (Some(true), true) => Health::Troubled,
+            (Some(true), false) => Health::Fine,
+        }
+    }
 }
 
 /// A channel being dragged towards a plot.
@@ -1918,6 +1939,7 @@ impl AppDaq {
                         expanded: false,
                         kind: DeviceKind::Calculated,
                         connected: None,
+                        concern: None,
                     });
 
                     self.adding_device = None;
@@ -1961,6 +1983,7 @@ impl AppDaq {
                         expanded: false,
                         kind: DeviceKind::Measured(at),
                         connected: None,
+                        concern: None,
                     },
                 );
 
@@ -2934,6 +2957,13 @@ impl AppDaq {
                                 found.connected = Some(connected);
                             }
                         }
+                        FromAcquisition::Trouble { device, concern } => {
+                            if let Some(found) =
+                                self.devices.iter_mut().find(|found| found.name == device)
+                            {
+                                found.concern = concern;
+                            }
+                        }
                     }
                 }
 
@@ -3238,6 +3268,12 @@ impl AppDaq {
                 }
             }
             self.run = RunState::Stopped;
+            // A complaint is about a device that is reading, and none of them
+            // are now. Left standing it would be an amber dot describing a run
+            // that is over.
+            for device in self.devices.iter_mut() {
+                device.concern = None;
+            }
             // The devices are free again, and whether they are still there is
             // worth knowing before the next run rather than during it.
             self.check_connections();
@@ -5425,7 +5461,7 @@ impl AppDaq {
                     // Held off the name rather than butted against
                     // it: it is a fact about the device, not part
                     // of what it is called.
-                    container(connection_dot(device.connected))
+                    container(connection_dot(device.health()))
                         .padding(padding::left(6)),
                     space::horizontal(),
                     // Adding a channel is a change to the rig like

@@ -52,6 +52,10 @@ fn main() -> Result<()> {
                 println!("  problem on {}: {}", device, error);
             }
             DeviceEvent::Connected { device } => println!("  {} came back", device),
+            DeviceEvent::Concern { device, concern } => match concern {
+                Some(concern) => println!("  {} is unhappy: {}", device, concern),
+                None => println!("  {} is reading cleanly again", device),
+            },
             DeviceEvent::Disconnected { device, cause } => {
                 println!("  lost {}: {}", device, cause.unwrap_or_default())
             }

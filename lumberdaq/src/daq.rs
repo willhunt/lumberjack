@@ -2,6 +2,7 @@ use crate::{ Error, Result };
 use crate::calculated::{ Calculator, ChannelRef };
 use crate::config::{ DaqConfig, DeviceConfig };
 use crate::device::Device;
+use crate::hardware::HardwareDataAquisition;
 use crate::session::{ run_device, DeviceEvent, DeviceMessage };
 use crate::storage::DataSink;
 use serde::{ Deserialize, Serialize };
@@ -165,6 +166,7 @@ impl Daq {
         let mut problems: Vec<(String, String)> = Vec::new();
         for device in self.devices.iter_mut() {
             let was_connected = device.is_connected();
+            let was_troubled = device.hardware.concern().is_some();
             if let Err(error) = device.read() {
                 problems.push((device.info.name.clone(), error.to_string()));
             }
@@ -177,8 +179,48 @@ impl Daq {
                 };
                 problems.push((device.info.name.clone(), format!("lost connection: {}", cause)));
             }
+
+            // A device that is working but unhappy. Reported when it starts
+            // and when it stops, not for every cycle in between: a device
+            // grumbling ten times a second would bury everything else in the
+            // log, and the state is available to ask for at any time.
+            //
+            // Whether rather than what, so a fault that reports a different
+            // frame each time is still one complaint. What it says is carried
+            // by the line written when it started.
+            match (was_troubled, device.hardware.concern()) {
+                (false, Some(concern)) => {
+                    problems.push((device.info.name.clone(), concern));
+                }
+                (true, None) => {
+                    problems.push((
+                        device.info.name.clone(),
+                        "reading cleanly again".to_string(),
+                    ));
+                }
+                _ => {}
+            }
         }
         problems
+    }
+
+    /// Devices that are working but have something to complain about, paired
+    /// with what it is.
+    ///
+    /// Separate from `disconnected_devices` because it is a different state
+    /// and wants different treatment: these are returning data, and a caller
+    /// showing them as failed would be wrong. Asked for rather than pushed,
+    /// so an interface can paint a warning for as long as it is true.
+    pub fn troubled_devices(&self) -> Vec<(String, String)> {
+        self.devices
+            .iter()
+            .filter_map(|device| {
+                device
+                    .hardware
+                    .concern()
+                    .map(|concern| (device.info.name.clone(), concern))
+            })
+            .collect()
     }
 
     /// Devices that are not currently usable, paired with what went wrong.

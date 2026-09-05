@@ -8,11 +8,11 @@ use serialport;
 use chrono::{ DateTime, Utc };
 use regex::Regex;
 use std::io::Read;
-use std::sync::atomic::{ AtomicBool, Ordering };
+use std::sync::atomic::{ AtomicBool, AtomicU64, Ordering };
 use std::sync::mpsc::{ self, Receiver, Sender, TryRecvError };
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{ Duration, Instant };
 
 
 /// This device reads a stream of data from a serial port in a comma-separated format, and splits it into channels according to the config.
@@ -156,6 +156,22 @@ const FIELD_SEPARATOR: char = ',';
 /// grow without bound for the rest of the run.
 const MAX_BUFFER_BYTES: usize = 64 * 1024;
 
+/// How long bytes may keep arriving without completing a single frame before
+/// the device says something is wrong.
+///
+/// Measured in time rather than in bytes. Waiting for a bufferful means the
+/// complaint arrives when enough rubbish has accumulated, and how long that
+/// takes depends on the baud rate, the frame size and how badly the rate is
+/// wrong - a minute or more in practice, which is far too late to be the
+/// answer to "why is nothing being recorded".
+///
+/// Only counted against reads that actually returned bytes, so a device that
+/// is simply quiet between frames never trips it: the clock is "we are being
+/// sent something and none of it is a frame", not "we have not heard anything
+/// lately". Three seconds is long enough for any frame to finish arriving at
+/// a sane rate and short enough to see before giving up on it.
+const UNMATCHED_AFTER: Duration = Duration::from_secs(3);
+
 /// A frame, and when it finished arriving.
 struct StampedFrame {
     at: DateTime<Utc>,
@@ -185,6 +201,15 @@ pub struct SerialStream {
     /// Asks the reader thread to finish.
     stop: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
+    /// How many bufferfuls the reader has given up on because nothing in them
+    /// looked like a frame. Shared with the reader thread, which is the only
+    /// place that can see it happen.
+    unmatched: Arc<AtomicU64>,
+    /// What is wrong with this device, while it is still working.
+    ///
+    /// State rather than an event, so an interface can show it for as long as
+    /// it is true. Refreshed by every read and cleared by the first clean one.
+    concern: Option<String>,
 }
 
 impl SerialStream {
@@ -213,6 +238,8 @@ impl SerialStream {
             frames: None,
             stop: Arc::new(AtomicBool::new(false)),
             reader: None,
+            unmatched: Arc::new(AtomicU64::new(0)),
+            concern: None,
         })
     }
 
@@ -260,11 +287,17 @@ impl DeviceInterface for SerialStream {
         let (sender, receiver) = mpsc::channel();
         let pattern = self.frame_pattern.clone();
         let thread_stop = Arc::clone(&stop);
+        // Counted per connection, like the flag above: what the last one made
+        // of the stream says nothing about this one.
+        let unmatched = Arc::new(AtomicU64::new(0));
+        let thread_unmatched = Arc::clone(&unmatched);
 
         let reader = std::thread::spawn(move || {
-            read_frames(port, pattern, sender, thread_stop);
+            read_frames(port, pattern, sender, thread_stop, thread_unmatched);
         });
 
+        self.unmatched = unmatched;
+        self.concern = None;
         self.stop = stop;
         self.frames = Some(receiver);
         self.reader = Some(reader);
@@ -286,9 +319,13 @@ fn read_frames(
     pattern: Regex,
     sender: Sender<StampedFrame>,
     stop: Arc<AtomicBool>,
+    unmatched: Arc<AtomicU64>,
 ) {
     let mut buffer = String::new();
     let mut bytes = [0u8; 4096];
+    // Nothing has arrived yet, so the clock starts now rather than at some
+    // moment in the past that would complain before anything had a chance.
+    let mut last_frame = Instant::now();
 
     while !stop.load(Ordering::Relaxed) {
         let count = match port.read(&mut bytes) {
@@ -321,13 +358,25 @@ fn read_frames(
             newest = Some(frame);
         }
         if let Some(frame) = newest {
+            last_frame = Instant::now();
             if sender.send(StampedFrame { at: at, frame: frame }).is_err() {
                 return; // nobody is listening any more
             }
+        } else if last_frame.elapsed() > UNMATCHED_AFTER {
+            // Bytes keep arriving and none of them are finishing a frame.
+            // That is what a wrong baud rate looks like from in here, and it
+            // is the one failure nobody could see from outside: the port
+            // opens, the device looks connected, and nothing is ever recorded.
+            unmatched.fetch_add(1, Ordering::Relaxed);
+            // Restarted so this is one complaint per window rather than one
+            // per read, which at a hundred reads a second is a different
+            // thing entirely.
+            last_frame = Instant::now();
         }
 
-        // Bytes arriving that never form a frame means the stream is not what
-        // the pattern says it is. Dropping them rather than growing all run.
+        // Whatever is in there is not becoming frames. Dropping it rather than
+        // growing all run - the complaint above has already been made, so this
+        // is only about memory.
         if buffer.len() > MAX_BUFFER_BYTES {
             buffer.clear();
         }
@@ -435,13 +484,76 @@ impl HardwareDataAquisition for SerialStream {
         }
 
         let mut readings: Vec<Vec<DataPoint>> = vec![Vec::new(); self.config.channels.len()];
+        let mut skipped = 0usize;
+        let mut reason: Option<String> = None;
+
         for frame in stamped.iter() {
-            let values = parse_frame_values(&frame.frame, &self.config.channels)?;
-            for (index, value) in values.iter().enumerate() {
-                readings[index].push(DataPoint { datetime: frame.at, value: *value });
+            match parse_frame_values(&frame.frame, &self.config.channels) {
+                Ok(values) => {
+                    for (index, value) in values.iter().enumerate() {
+                        readings[index].push(DataPoint { datetime: frame.at, value: *value });
+                    }
+                }
+                // A frame the pattern let through that the channels cannot
+                // read. Dropping just this one keeps the rest of the batch,
+                // which is the whole point: a device that prints a status
+                // line every minute should not punch a hole in a recording.
+                //
+                // Only the first reason is kept. A hundred identical
+                // complaints from one batch say no more than one does.
+                Err(error) => {
+                    skipped += 1;
+                    reason.get_or_insert_with(|| error.to_string());
+                }
             }
         }
+
+        self.concern = self.what_is_wrong(skipped, stamped.len(), reason);
         Ok(readings)
+    }
+
+    /// What this device should be complaining about, if anything.
+    ///
+    /// Kept as state that stands until it is contradicted, so an interface can
+    /// show it for as long as it is true rather than having to catch an event
+    /// as it goes past.
+    fn concern(&self) -> Option<String> {
+        self.concern.clone()
+    }
+}
+
+impl SerialStream {
+    /// Judge one read: what came out of it, and what the reader made of the
+    /// bytes it could not use.
+    fn what_is_wrong(
+        &self,
+        skipped: usize,
+        frames: usize,
+        reason: Option<String>,
+    ) -> Option<String> {
+        // Taken rather than read, so each bufferful of noise is counted once.
+        let unmatched = self.unmatched.swap(0, Ordering::Relaxed);
+
+        match (skipped, unmatched, frames) {
+            // Frames are arriving and some of them cannot be read.
+            (1.., _, _) => Some(format!(
+                "skipping frames that do not fit the channels: {}",
+                reason.unwrap_or_else(|| "unreadable".to_string())
+            )),
+            // Or bytes are arriving and none of them are frames at all, which
+            // is what a wrong baud rate looks like from here. It is also what
+            // a wrong frame pattern looks like, so say both.
+            (0, 1.., _) => Some(format!(
+                "reading {} but nothing matches the frame pattern - check the baud rate",
+                self.config.port
+            )),
+            // A batch that arrived and read cleanly settles it.
+            (0, 0, 1..) => None,
+            // An empty batch says nothing either way: it is what draining
+            // faster than the device sends looks like. Leave the last answer
+            // standing rather than treating silence as good news.
+            (0, 0, 0) => self.concern.clone(),
+        }
     }
 }
 
@@ -635,6 +747,96 @@ mod tests {
         let backwards = parse_frame_values(EXAMPLE, &line_inputs(&[3, 1])).unwrap();
         assert_eq!(forwards[0], backwards[1]);
         assert_eq!(forwards[1], backwards[0]);
+    }
+
+    /// A device with two channels and nothing connected to it, ready to be
+    /// handed frames by hand.
+    fn unattached(indices: &[i64]) -> SerialStream {
+        SerialStream::from_config(SerialStreamConfig {
+            port: "COM_TEST".to_string(),
+            baudrate: 9600,
+            frame_pattern: default_frame_pattern(),
+            channels: line_inputs(indices),
+        })
+        .expect("the default pattern compiles")
+    }
+
+    /// Put frames in front of a device as though a reader thread had. The
+    /// sender is returned so it stays alive: dropping it would look like the
+    /// reader ending, which is a different thing entirely.
+    fn hand_over(device: &mut SerialStream, frames: &[&str]) -> Sender<StampedFrame> {
+        let (sender, receiver) = mpsc::channel();
+        for frame in frames {
+            sender
+                .send(StampedFrame { at: Utc::now(), frame: frame.to_string() })
+                .expect("the receiver is right here");
+        }
+        device.frames = Some(receiver);
+        sender
+    }
+
+    #[test]
+    fn a_frame_the_channels_cannot_read_is_skipped_and_the_rest_are_kept() {
+        // The whole point of skipping: a status line in the middle of a
+        // recording costs that one frame, not the batch around it.
+        let mut device = unattached(&[0, 1]);
+        let _sender = hand_over(&mut device, &["1,2", "STBY,none", "3,4"]);
+
+        let readings = device.read().expect("a frame it cannot read is not a failed read");
+
+        assert_eq!(readings[0].len(), 2, "both readable frames should survive");
+        assert_eq!(readings[0][0].value, 1.0);
+        assert_eq!(readings[0][1].value, 3.0);
+        assert_eq!(readings[1][1].value, 4.0);
+    }
+
+    #[test]
+    fn skipping_a_frame_is_something_the_device_says_rather_than_swallows() {
+        // Skipping silently would turn a misconfigured index into no data and
+        // no explanation, which is worse than the error it replaced.
+        let mut device = unattached(&[0, 1]);
+        let _sender = hand_over(&mut device, &["1,2", "STBY,none"]);
+
+        device.read().expect("still a successful read");
+        let concern = device.concern().expect("it should have something to say");
+        assert!(concern.contains("skipping frames"), "{}", concern);
+    }
+
+    #[test]
+    fn a_clean_batch_settles_it_but_an_empty_one_says_nothing() {
+        let mut device = unattached(&[0, 1]);
+
+        let _bad = hand_over(&mut device, &["STBY,none"]);
+        device.read().expect("a successful read");
+        assert!(device.concern().is_some());
+
+        // Nothing arrived. That is what draining faster than the device sends
+        // looks like, so the last answer should stand.
+        let _quiet = hand_over(&mut device, &[]);
+        device.read().expect("a successful read");
+        assert!(device.concern().is_some(), "silence is not good news");
+
+        // A batch that read cleanly is.
+        let _good = hand_over(&mut device, &["1,2"]);
+        device.read().expect("a successful read");
+        assert!(device.concern().is_none(), "a clean batch should clear it");
+    }
+
+    #[test]
+    fn bytes_that_never_form_a_frame_are_blamed_on_the_baud_rate() {
+        // What a wrong baud rate looks like from in here: the reader throwing
+        // away bufferfuls, and not one frame to show for any of it.
+        let mut device = unattached(&[0, 1]);
+        let _sender = hand_over(&mut device, &[]);
+        device.unmatched.store(1, Ordering::Relaxed);
+
+        device.read().expect("reading nothing is not a failure");
+        let concern = device.concern().expect("it should have something to say");
+        assert!(concern.contains("baud rate"), "{}", concern);
+
+        // Counted once. The complaint stands, but on the strength of the same
+        // bufferful rather than being renewed by it.
+        assert_eq!(device.unmatched.load(Ordering::Relaxed), 0);
     }
 
     #[test]

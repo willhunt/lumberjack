@@ -36,6 +36,9 @@ pub(crate) enum FromAcquisition {
     /// into a sentence and then parsing the sentence would be throwing the
     /// answer away and guessing it back.
     Connection { device: String, connected: bool },
+    /// A device that is reading but has something to complain about, or - with
+    /// `None` - one that has stopped complaining.
+    Trouble { device: String, concern: Option<String> },
 }
 
 /// A `DataSink` feeding the interface instead of a file.
@@ -201,8 +204,21 @@ pub(crate) fn start_acquisition(config: DaqConfig, directory: PathBuf) -> Acquis
                 });
             }
 
+            // Working but unhappy is its own state, and the dot beside the
+            // device is where it shows.
+            if let DeviceEvent::Concern { device, concern } = &event {
+                let _ = sender.try_send(FromAcquisition::Trouble {
+                    device: device.clone(),
+                    concern: concern.clone(),
+                });
+            }
+
             let _ = sender.try_send(FromAcquisition::Status(match event {
                 DeviceEvent::Problem { device, error } => format!("{}: {}", device, error),
+                DeviceEvent::Concern { device, concern } => match concern {
+                    Some(concern) => format!("{}: {}", device, concern),
+                    None => format!("{} is reading cleanly again", device),
+                },
                 DeviceEvent::Connected { device } => format!("{} came back", device),
                 DeviceEvent::Disconnected { device, cause } => {
                     format!("lost {}: {}", device, cause.unwrap_or_default())

@@ -50,6 +50,12 @@ impl Update {
             DeviceEvent::Problem { device, error } => {
                 Update::Problem { device: device, message: error.to_string() }
             }
+            // The display has no third state for a device that is reading but
+            // unhappy, so it says so in words rather than in colour.
+            DeviceEvent::Concern { device, concern } => Update::Problem {
+                device: device,
+                message: concern.unwrap_or_else(|| "reading cleanly again".to_string()),
+            },
         }
     }
 }

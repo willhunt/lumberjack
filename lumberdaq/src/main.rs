@@ -189,6 +189,10 @@ fn record(directory: &str) -> Result<()> {
         DeviceEvent::Connected { device } => {
             println!("    reconnected  {}", device);
         }
+        DeviceEvent::Concern { device, concern } => match concern {
+            Some(concern) => eprintln!("    ? {}: {}", device, concern),
+            None => println!("    {} is reading cleanly again", device),
+        },
         DeviceEvent::Disconnected { device, cause } => {
             eprintln!(
                 "    ! lost {}: {}",
