@@ -1,4 +1,5 @@
 mod acquisition;
+mod logbook;
 mod look;
 mod settings;
 
@@ -1114,6 +1115,11 @@ struct AppDaq {
     plot_menu: bool,
     /// Whether the settings dialog is up.
     settings_open: bool,
+    /// The log as it is kept on disk, beside the one on screen.
+    ///
+    /// The pane holds the last couple of hundred lines and loses them when the
+    /// window closes; this one is what somebody can send afterwards.
+    logbook: logbook::Logbook,
     /// What this person likes, as opposed to what this project is.
     ///
     /// Loaded at startup and written back as soon as anything changes: it is a
@@ -1320,6 +1326,7 @@ impl AppDaq {
         // Read before the interface exists, so the first frame is already
         // drawn the way this person asked for.
         let (settings, complaint) = UserSettings::load();
+        let (logbook, no_log) = logbook::Logbook::open();
 
         // Nothing open yet. An empty rig is a perfectly good rig - no devices,
         // no plots - which is what lets the rest of the interface be written as
@@ -1331,6 +1338,7 @@ impl AppDaq {
             devices: Vec::new(),
             plots: Vec::new(),
             settings,
+            logbook,
             mode: Mode::Record,
             view_plots: vec![empty_plot(1)],
             view_panes: pane_grid::State::with_configuration(Configuration::Pane(1)),
@@ -1377,6 +1385,11 @@ impl AppDaq {
         // A settings file that would not read is worth saying out loud, and
         // this is the first moment there is a log to say it in.
         if let Some(problem) = complaint {
+            app.note(problem);
+        }
+        // Said on screen, because it is the one thing the file cannot report:
+        // that there is no file.
+        if let Some(problem) = no_log {
             app.note(problem);
         }
 
@@ -3275,7 +3288,10 @@ impl AppDaq {
 
     /// Add a line to the run log, dropping the oldest once it is full.
     fn note(&mut self, text: String) {
-        self.log.push(LogEntry { at: Utc::now(), text });
+        let at = Utc::now();
+        self.logbook.write(at, &text);
+
+        self.log.push(LogEntry { at, text });
         // The oldest goes, since the newest is the one being read.
         if self.log.len() > LOG_LIMIT {
             self.log.remove(0);

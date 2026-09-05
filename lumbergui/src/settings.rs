@@ -214,6 +214,15 @@ impl UserSettings {
 /// convention. macOS gets `~/.config` too, which is not where a Mac app would
 /// normally put this — worth revisiting if this ever ships there.
 fn settings_path() -> Option<PathBuf> {
+    Some(config_dir()?.join("settings.json"))
+}
+
+/// The folder this person's own files live in: their settings, and the log.
+///
+/// Shared rather than worked out twice, so the two cannot end up in different
+/// places — and so somebody sending a settings file and a log is sending two
+/// files from one folder.
+pub(crate) fn config_dir() -> Option<PathBuf> {
     let directory = if let Some(appdata) = env::var_os("APPDATA") {
         PathBuf::from(appdata)
     } else if let Some(xdg) = env::var_os("XDG_CONFIG_HOME") {
@@ -222,7 +231,7 @@ fn settings_path() -> Option<PathBuf> {
         PathBuf::from(env::var_os("HOME")?).join(".config")
     };
 
-    Some(directory.join("lumberjack").join("settings.json"))
+    Some(directory.join("lumberjack"))
 }
 
 #[cfg(test)]
