@@ -5825,7 +5825,7 @@ impl AppDaq {
         // opening a serial port asserts DTR and resets most boards, so a rig
         // is checked when somebody wants to know, not every half minute.
         let check_button = hint(
-            button(refresh_cw().size(14))
+            button(refresh_cw().size(15))
                 .style(button::text)
                 .padding(4)
                 .on_press_maybe(match self.run == RunState::Stopped {
@@ -5833,15 +5833,30 @@ impl AppDaq {
                     // A run owns the devices; there is nothing to ask.
                     false => None,
                 }),
-            "Check the devices are there",
+            "Check devices",
         );
 
         self.pane(
             row![text("Devices"), space::horizontal(), check_button, add_device_button]
-                .spacing(2)
+                .spacing(4)
                 .align_y(Center),
             device_list.into(),
         )
+    }
+
+    /// Adding a channel to whatever is selected, where that means anything.
+    ///
+    /// Only a device takes a channel. A plot, a channel, and anything read
+    /// back out of a recording do not, so they are offered nothing rather
+    /// than a control that would have to explain itself.
+    fn add_to_selected(&self) -> Option<Message> {
+        let editable = self.rig_editable();
+
+        match self.selected? {
+            Selection::Device(index) => editable.then_some(Message::ChannelAdded(index)),
+            Selection::Calculated => editable.then_some(Message::CalculatedChannelAdded),
+            _ => None,
+        }
     }
 
     /// Whatever is selected, and what can be changed about it.
@@ -5850,6 +5865,19 @@ impl AppDaq {
         // having where its absence would be a surprise - the
         // transport buttons keep their places - but nothing is
         // owed an explanation for why a recorded run has no delete.
+        // Left of the delete, in the order the two sit in a device's row.
+        let add = self.add_to_selected().map(|message| {
+            Element::from(
+                hint(
+                    button(add_channel_mark(true))
+                        .style(button::text)
+                        .padding(4)
+                        .on_press(message),
+                    "Add channel",
+                ),
+            )
+        });
+
         let remove = self.delete_selected().map(|message| {
             Element::from(
                 button(trash_two().size(16))
@@ -5890,7 +5918,9 @@ impl AppDaq {
 
         self.pane(
             row![text("Configuration"), space::horizontal()]
+                .extend(add)
                 .extend(remove)
+                .spacing(4)
                 .align_y(Center),
             panel,
         )

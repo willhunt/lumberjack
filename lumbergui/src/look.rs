@@ -328,6 +328,24 @@ pub(crate) fn transport_mark<'a>(
     })
 }
 
+/// The mark for adding a channel, dimmed when there is nothing to press.
+///
+/// The lucide icons beside this one are text, so a button fades them with
+/// itself when it has no message. An svg has no such connection to the button
+/// holding it - it would stay bright against faded neighbours and read as the
+/// one thing still available - so the state is handed to it.
+pub(crate) fn add_channel_mark<'a>(offered: bool) -> Element<'a, Message> {
+    tinted_mark(ADD_CHANNEL, ROW_ICON, move |theme: &Theme| {
+        let text = theme.extended_palette().background.base.text;
+
+        match offered {
+            true => text,
+            // The same halving iced fades a disabled button's own text by.
+            false => Color { a: text.a * 0.5, ..text },
+        }
+    })
+}
+
 /// Something known about the thing selected, said rather than edited.
 ///
 /// The reporting counterpart to `rig_field`: same shape on the page, no field,
@@ -427,6 +445,15 @@ pub(crate) const PLAY: &[u8] = include_bytes!("../../assets/Play.svg");
 pub(crate) const STOP: &[u8] = include_bytes!("../../assets/Stop.svg");
 pub(crate) const RECORD: &[u8] = include_bytes!("../../assets/Record.svg");
 pub(crate) const DATA_MODE: &[u8] = include_bytes!("../../assets/DataMode.svg");
+pub(crate) const ADD_CHANNEL: &[u8] = include_bytes!("../../assets/AddChannel.svg");
+
+/// How tall a mark drawn in a row of controls is.
+///
+/// Matched to the `.size(14)` the lucide glyphs beside it are set at. The two
+/// are measured differently - a glyph leaves room inside its box and this file
+/// draws to its own edges - so if it ever reads a shade large beside them, this
+/// is the number to nudge rather than the drawing.
+pub(crate) const ROW_ICON: f32 = 14.0;
 
 /// The face the name is set in.
 ///
