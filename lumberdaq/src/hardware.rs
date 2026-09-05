@@ -79,6 +79,31 @@ pub enum SampleRate {
 }
 
 impl HardwareConfig {
+    /// Which piece of hardware this points at, where the settings name one.
+    ///
+    /// A serial device is its port; a DAQmx device is the name NI MAX gave it.
+    /// Both are exclusive - one program has a serial port open or it does not,
+    /// and two devices addressing `Dev1` are addressing one box - so two
+    /// devices naming the same one is a mistake rather than a preference.
+    ///
+    /// `None` where nothing in the config picks a particular piece. A mock has
+    /// no hardware at all, and a Pico takes the first unit it finds rather
+    /// than one it is told about, so two of those cannot be told apart from
+    /// here and this says nothing about them.
+    pub fn address(&self) -> Option<String> {
+        let address = match self {
+            HardwareConfig::SerialStream(serial) => serial.port.clone(),
+            HardwareConfig::NiDaqmx(ni) => ni.device.clone(),
+            HardwareConfig::MockHardware(_)
+            | HardwareConfig::PicoHrdl(_)
+            | HardwareConfig::None => return None,
+        };
+
+        // A setting nobody has filled in yet points at nothing, and nothing
+        // cannot be taken twice.
+        (!address.trim().is_empty()).then_some(address)
+    }
+
     /// How often this hardware produces a sample per channel.
     pub fn sample_rate(&self) -> SampleRate {
         match self {

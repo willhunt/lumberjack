@@ -255,6 +255,20 @@ pub(crate) fn pane_rule<'a>() -> Element<'a, Message> {
 
 /// The bubble a tooltip is drawn in. Solid, so what is underneath does not
 /// show through the explanation.
+/// The same, for something that is wrong but is still working.
+///
+/// Amber rather than red, matching the border on the field it explains: a
+/// setting that has to be sorted out before a run, not one that has already
+/// broken something.
+pub(crate) fn warning_tip_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    let mut style = tip_style(theme);
+
+    style.border.color = palette.warning.base.color;
+    style.text_color = Some(palette.warning.base.color);
+    style
+}
+
 pub(crate) fn error_tip_style(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
     let mut style = tip_style(theme);
@@ -684,12 +698,28 @@ pub(crate) fn explaining<'a>(
     //
     // With nothing to say the bubble is an empty, unstyled space: it is still
     // there, and it draws nothing.
+    bubbled(control, message, error_tip_style)
+}
+
+/// The same, in the amber of a setting that wants sorting out rather than the
+/// red of one that is already broken.
+pub(crate) fn warning_about<'a>(
+    control: Element<'a, Message>,
+    message: Option<String>,
+) -> Element<'a, Message> {
+    bubbled(control, message, warning_tip_style)
+}
+
+/// A control with a bubble behind it, in whichever colour was asked for.
+fn bubbled<'a>(
+    control: Element<'a, Message>,
+    message: Option<String>,
+    style: fn(&Theme) -> container::Style,
+) -> Element<'a, Message> {
     let bubble: Element<'a, Message> = match message {
-        Some(message) => container(text(message).size(13))
-            .padding(6)
-            .max_width(320)
-            .style(error_tip_style)
-            .into(),
+        Some(message) => {
+            container(text(message).size(13)).padding(6).max_width(320).style(style).into()
+        }
         None => space::horizontal().width(0).into(),
     };
 

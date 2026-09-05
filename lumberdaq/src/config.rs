@@ -3,7 +3,7 @@ use crate::daq::DaqInfo;
 use crate::device::DeviceInfo;
 use crate::hardware::{ HardwareConfig, SampleRate };
 use serde::{ Deserialize, Serialize };
-use std::collections::BTreeSet;
+use std::collections::{ BTreeMap, BTreeSet };
 
 /// The description of a measurement setup: which devices, which channels,
 /// which ports. Enough to rebuild the whole thing, and nothing else.
@@ -41,6 +41,22 @@ pub struct DeviceConfig {
 /// for configs written before the setting existed.
 pub fn default_read_interval_ms() -> u64 {
     100
+}
+
+/// Two devices pointed at one piece of hardware.
+///
+/// Worth finding before a run rather than during one. What happens otherwise
+/// is that the first device opens the port and the second is refused by the
+/// operating system, which reports it as access being denied - a message that
+/// sends somebody to look at a cable when the fault is in the setup.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddressClash {
+    /// The device that cannot have it.
+    pub device: String,
+    /// The port, or unit name, they are both pointed at.
+    pub address: String,
+    /// The device that got there first, by its place in the setup.
+    pub taken_by: String,
 }
 
 /// What a merge took from another configuration, and what it left behind.
@@ -111,6 +127,41 @@ impl DaqConfig {
     /// what a calculated channel works out is usually the quantity somebody
     /// actually wanted, and the last thing to hide from a plot.
     ///
+    /// Devices pointed at hardware another device has already claimed.
+    ///
+    /// Checked over the whole setup rather than at the moment somebody picks
+    /// from a list, because the list is not the only way in: a configuration
+    /// loaded from a file, one merged in from a library, and one edited by
+    /// hand can all arrive with the same port named twice, and none of them
+    /// passes through a dropdown.
+    ///
+    /// The first device to name it keeps it and later ones are the clashes,
+    /// which is arbitrary but stable: the answer does not change while nothing
+    /// is edited, so what is reported does not move around by itself.
+    pub fn address_clashes(&self) -> Vec<AddressClash> {
+        let mut taken: BTreeMap<String, String> = BTreeMap::new();
+        let mut clashes = Vec::new();
+
+        for device in self.devices.iter() {
+            let Some(address) = device.hardware.address() else { continue };
+
+            // Compared without case, because Windows does not tell COM3 from
+            // com3 and a hand written config may say either.
+            match taken.get(&address.to_lowercase()) {
+                Some(first) => clashes.push(AddressClash {
+                    device: device.info.name.clone(),
+                    address,
+                    taken_by: first.clone(),
+                }),
+                None => {
+                    taken.insert(address.to_lowercase(), device.info.name.clone());
+                }
+            }
+        }
+
+        clashes
+    }
+
     /// Take everything from another configuration that this one has room for.
     ///
     /// The point is a library: a file of devices somebody keeps to hand and
@@ -296,6 +347,66 @@ mod tests {
             channels,
         });
         config
+    }
+
+    fn on_port(name: &str, port: &str) -> DeviceConfig {
+        DeviceConfig {
+            info: DeviceInfo { name: name.to_string() },
+            read_interval_ms: 100,
+            hardware: HardwareConfig::SerialStream(
+                crate::hardware::serial_stream::SerialStreamConfig {
+                    port: port.to_string(),
+                    baudrate: 115200,
+                    frame_pattern: r"#([^#$]*)\$".to_string(),
+                    channels: vec![],
+                },
+            ),
+        }
+    }
+
+    #[test]
+    fn two_devices_on_one_port_are_reported_against_the_later_one() {
+        let config = setup(vec![
+            on_port("Arduino 1", "COM3"),
+            on_port("Arduino 2", "COM3"),
+            on_port("Arduino 3", "COM7"),
+        ]);
+
+        let clashes = config.address_clashes();
+
+        assert_eq!(clashes.len(), 1, "{:?}", clashes);
+        // The first to name it keeps it, so the complaint is about the second.
+        assert_eq!(clashes[0].device, "Arduino 2");
+        assert_eq!(clashes[0].taken_by, "Arduino 1");
+        assert_eq!(clashes[0].address, "COM3");
+    }
+
+    #[test]
+    fn a_port_is_the_same_port_whatever_its_case() {
+        // Windows does not tell COM3 from com3, and a config may be written
+        // by hand.
+        let config = setup(vec![on_port("Arduino 1", "COM3"), on_port("Arduino 2", "com3")]);
+
+        assert_eq!(config.address_clashes().len(), 1);
+    }
+
+    #[test]
+    fn devices_with_no_port_chosen_yet_do_not_clash_with_each_other() {
+        // Two serial devices added and not yet pointed anywhere. Neither is
+        // taking anything, so neither is in the other's way.
+        let config = setup(vec![on_port("Arduino 1", ""), on_port("Arduino 2", "   ")]);
+
+        assert!(config.address_clashes().is_empty());
+    }
+
+    #[test]
+    fn hardware_that_names_no_particular_unit_is_not_judged() {
+        // Two mock devices share nothing, and two Picos take whichever unit
+        // they find rather than one the config names, so nothing here can say
+        // whether they are the same box.
+        let config = setup(vec![device("one", &["a"]), device("two", &["b"])]);
+
+        assert!(config.address_clashes().is_empty());
     }
 
     #[test]

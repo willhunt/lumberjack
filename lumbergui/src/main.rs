@@ -1670,6 +1670,9 @@ impl AppDaq {
         self.check_connections();
 
         self.note(format!("project {}", directory.display()));
+        // After the project is named, so a complaint about it is not the first
+        // thing in the log with nothing yet saying which project it is about.
+        self.note_address_clashes();
         for note in notes {
             self.note(note);
         }
@@ -2347,6 +2350,9 @@ impl AppDaq {
                 if !report.took_nothing() {
                     self.reload_devices();
                     self.rig_changed();
+                    // A library device may name a port something here is
+                    // already on, which no name check would catch.
+                    self.note_address_clashes();
                 }
             }
             Message::ProjectCreated => {
@@ -2808,6 +2814,8 @@ impl AppDaq {
                         let name = device.info.name.clone();
                         self.check_devices(Checking::Just(name));
                     }
+
+                    self.note_address_clashes();
                 }
             }
             Message::SerialBaudChosen(index, baudrate) => {
@@ -4967,6 +4975,28 @@ impl AppDaq {
             options.push(current.clone());
         }
 
+        // Over the whole setup rather than this one field, because the
+        // dropdown is not the only way a port gets named twice: a project
+        // loaded from disk, a library merged in, and a hand edited file all
+        // arrive without passing through it.
+        let taken_by = self.config.devices.get(index).and_then(|device| {
+            let name = device.info.name.clone();
+            self.config
+                .address_clashes()
+                .into_iter()
+                .find(|clash| clash.device == name)
+                .map(|clash| clash.taken_by)
+        });
+
+        let port_style: fn(&Theme, pick_list::Status) -> pick_list::Style = match taken_by {
+            Some(_) => field_pick_warning_style,
+            None => field_pick_style,
+        };
+
+        // Named rather than only marked. "In use" tells somebody to go and
+        // find the other device; saying which one means not having to.
+        let clash = taken_by.map(|by| format!("COM port in use by {}", by));
+
         let port: Element<'_, Message> = match self.rig_editable() {
             true => pick_list(options, Some(current), move |label| {
                 // The label carries the product name for the human; the config
@@ -4975,8 +5005,7 @@ impl AppDaq {
                 Message::SerialPortChosen(index, port)
             })
             .placeholder("Choose a port")
-            .style(field_pick_style)
-            .style(field_pick_style)
+            .style(port_style)
             .text_size(14)
             .width(Fill)
             .into(),
@@ -5022,7 +5051,11 @@ impl AppDaq {
                 // port is missing is that it was not plugged in yet, and the
                 // answer is to plug it in and look again.
                 row![
-                    port,
+                    // Wrapped whether or not there is anything to say, so what
+                    // sits at this position keeps its type as a clash appears
+                    // and clears - the same reason the equation field is
+                    // always wrapped.
+                    warning_about(port, clash),
                     hint(
                         button(refresh_cw().size(14))
                             .style(button::text)
@@ -5944,6 +5977,21 @@ impl AppDaq {
                 .align_y(Center),
             device_list.into(),
         )
+    }
+
+    /// Say which devices are pointed at hardware another one has claimed.
+    ///
+    /// Said at the moments a clash can arrive without somebody watching for
+    /// it - opening a project, loading devices, choosing a port - rather than
+    /// on every edit. The border on the field is what says it is still true;
+    /// this is what says what it is.
+    fn note_address_clashes(&mut self) {
+        for clash in self.config.address_clashes() {
+            self.note(format!(
+                "{} is on {}, which {} is already using",
+                clash.device, clash.address, clash.taken_by
+            ));
+        }
     }
 
     /// Rebuild the tree from the configuration, keeping what is known.
