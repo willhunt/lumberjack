@@ -1557,9 +1557,9 @@ impl AppDaq {
         };
 
         self.acquisition = Some(start_acquisition(self.config.clone(), directory));
-        self.run = RunState::Running;
+        self.run = RunState::Starting;
         self.set_plot_panning(false);
-        self.note("acquisition started".to_string());
+        self.note("connecting to the devices".to_string());
     }
 
     /// What the interface shows before a project has been chosen.
@@ -2846,6 +2846,16 @@ impl AppDaq {
                             self.record(&device, &channel, &datapoints);
                         }
                         FromAcquisition::Status(text) => self.note(text),
+                        FromAcquisition::Ready => {
+                            if self.run == RunState::Starting {
+                                self.run = RunState::Running;
+                                // Timed from here rather than from the press,
+                                // so the trace starts at the right hand edge
+                                // where it belongs.
+                                self.slide_viewport();
+                                self.note("acquisition started".to_string());
+                            }
+                        }
                         FromAcquisition::Connection { device, connected } => {
                             if let Some(found) =
                                 self.devices.iter_mut().find(|found| found.name == device)
@@ -2861,10 +2871,12 @@ impl AppDaq {
 
                 // Slid every frame whether or not anything arrived, which is
                 // what keeps the scroll smooth while the data stays honest.
-                // Only while reading: a stopped plot that kept sliding would
-                // walk away from its own data, and would undo a pan on the
-                // very next frame.
-                if self.run != RunState::Stopped {
+                // Only while reading. A stopped plot that kept sliding would
+                // walk away from its own data and undo a pan on the next
+                // frame; a starting one would scroll away the seconds spent
+                // opening the hardware, and the first reading would land
+                // somewhere behind the leading edge.
+                if self.run == RunState::Running {
                     self.slide_viewport();
                 }
 
@@ -5579,7 +5591,10 @@ impl AppDaq {
         // control that rearranges itself under the cursor.
         let run_control = row![
             transport(
-                transport_mark(PLAY, self.run == RunState::Running, |palette| {
+                // Lit while starting as well as while running: the press
+                // did something, and a control that stays dark for a second
+                // after it is pressed reads as one that did not take.
+                transport_mark(PLAY, self.run != RunState::Stopped, |palette| {
                     palette.success.base.color
                 }),
                 "Start acquisition",

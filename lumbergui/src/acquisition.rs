@@ -23,6 +23,12 @@ use std::thread;
 pub(crate) enum FromAcquisition {
     Data { device: String, channel: String, datapoints: Vec<DataPoint> },
     Status(String),
+    /// Every device has been tried, and reading is about to begin.
+    ///
+    /// Sent between connecting and running. Opening hardware takes time — a
+    /// Pico is about a second — and until this arrives there is nothing to
+    /// draw, so the interface waits rather than scrolling an empty chart.
+    Ready,
     /// Whether one device is talking to its hardware.
     ///
     /// Kept apart from `Status` rather than read back out of a log line: the
@@ -90,6 +96,14 @@ pub(crate) struct Acquisition {
 /// devices would mean two threads holding the same serial port.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunState {
+    /// Asked for, and opening the hardware. Nothing is being read yet.
+    ///
+    /// Between pressing play and the first reading there is real work: a
+    /// `Daq` is built, sinks are attached, and every device is opened, which
+    /// for a Pico means loading a driver and initialising a unit over USB.
+    /// Treating that as running made the chart scroll against a clock while
+    /// nothing arrived, so the trace began a second adrift of the axis.
+    Starting,
     Running,
     Stopping,
     Stopped,
@@ -169,6 +183,10 @@ pub(crate) fn start_acquisition(config: DaqConfig, directory: PathBuf) -> Acquis
             // which name the software to install.
             report(format!("{} did not connect: {}", device, cause));
         }
+
+        // Everything that had to be opened has been tried. What follows is
+        // reading, which produces data straight away.
+        let _ = sender.try_send(FromAcquisition::Ready);
 
         let outcome = daq.run(&stop_in_thread, &mut |event| {
             // Both: the line for the log, and the fact for the dot beside the
