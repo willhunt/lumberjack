@@ -561,6 +561,35 @@ struct ViewChannel {
     readings: usize,
 }
 
+/// Which devices a check is about.
+///
+/// Checking one rather than all of them is not an optimisation. Opening a
+/// serial port asserts DTR, which resets an Arduino and most boards like it,
+/// so re-checking the whole rig because somebody picked a port from a list
+/// would reset every other board on the bench.
+#[derive(Clone, PartialEq)]
+enum Checking {
+    Everything,
+    /// One device, by the name the answers come back under.
+    Just(String),
+}
+
+/// What a check found about one device.
+struct Answered {
+    device: String,
+    connected: bool,
+    /// Why it did not answer, where it did not.
+    why: Option<String>,
+}
+
+/// What a whole check found, or why there was nothing to ask.
+///
+/// The error is for a rig that will not even build — a channel pointing
+/// somewhere it should not, say. Worth saying: answering that with an empty
+/// list, as the first version of this did, made a broken configuration and a
+/// rig where every device is fine look exactly alike.
+type Checked = Result<Vec<Answered>, String>;
+
 /// Which device in the setup a row of the tree stands for.
 ///
 /// Calculated channels are a device in the results and in the config, but they
@@ -1195,6 +1224,14 @@ struct AppDaq {
     /// offering everything the backend allows rather than nothing at all.
     ni_inputs: Option<usize>,
     pico_inputs: Option<u16>,
+    /// A check of every device, while it is on its way.
+    connection_check: Option<Receiver<Checked>>,
+    /// A check asked for while that one was still running.
+    ///
+    /// Trying ports one after another asks for a check faster than the
+    /// hardware can answer, and dropping the later ones leaves the dot
+    /// describing a port that is no longer selected.
+    wanted_check: Option<Checking>,
     /// An answer being fetched from a Pico unit, while it is on its way.
     ///
     /// The fetch opens the unit over USB, which takes about a second, so it
@@ -1233,6 +1270,7 @@ enum Message {
     LastProjectOpened,
     ModeChosen(Mode),
     RunsRefreshed,
+    ConnectionsChecked,
     ToggleRun(usize),
     ToggleRunDevice(usize, usize),
     /// The pointer entered or left a plot, while something is being dragged.
@@ -1376,6 +1414,8 @@ impl AppDaq {
             ni_devices: Vec::new(),
             ni_inputs: None,
             pico_inputs: None,
+            connection_check: None,
+            wanted_check: None,
             pico_probe: None,
             model: None,
             adding_device: None,
@@ -1540,6 +1580,10 @@ impl AppDaq {
         self.slide_viewport();
         self.settle_plots();
 
+        // Before anything is asked of the rig, so the dots say what is
+        // there rather than nothing until somebody presses play.
+        self.check_connections();
+
         self.note(format!("project {}", directory.display()));
         for note in notes {
             self.note(note);
@@ -1698,6 +1742,7 @@ impl AppDaq {
                 }
             }
             Message::RunsRefreshed => self.load_runs(),
+            Message::ConnectionsChecked => self.check_connections(),
             Message::ToggleRun(run) => {
                 if let Some(run) = self.runs.get_mut(run) {
                     run.expanded = !run.expanded;
@@ -2588,6 +2633,14 @@ impl AppDaq {
                 {
                     serial.port = port;
                     self.rig_changed();
+
+                    // The dot beside the device is about the old port until
+                    // something asks again, and the moment somebody picks a
+                    // port is the moment they want to know about it.
+                    if let Some(device) = self.config.devices.get(index) {
+                        let name = device.info.name.clone();
+                        self.check_devices(Checking::Just(name));
+                    }
                 }
             }
             Message::SerialBaudChosen(index, baudrate) => {
@@ -2868,6 +2921,7 @@ impl AppDaq {
 
                 self.reap_stopped_run();
                 self.collect_pico_probe();
+                self.collect_connection_check();
 
                 // Slid every frame whether or not anything arrived, which is
                 // what keeps the scroll smooth while the data stays honest.
@@ -2884,6 +2938,132 @@ impl AppDaq {
                 // saving costs no extra machinery.
                 self.save_layout_if_settled();
                 self.save_rig_if_settled();
+            }
+        }
+    }
+
+    /// Ask every device whether it is there, without starting a run.
+    ///
+    /// Opening a rig is how you find out that a cable is loose or a driver is
+    /// missing, and finding that out at the moment you meant to start
+    /// recording is finding out too late. This does the opening and lets go
+    /// again, so the dots beside the devices mean something while stopped.
+    ///
+    /// On a thread, because opening hardware is slow: a Pico is about a
+    /// second, and a serial port that is not there waits for its timeout.
+    ///
+    /// Not on a timer, deliberately. Opening a serial port asserts DTR, which
+    /// resets an Arduino and most boards like it — so a check that ran itself
+    /// every half minute would reset somebody's hardware all afternoon. It
+    /// happens when a project opens, when a run stops, when a device is
+    /// pointed at different hardware, and when asked.
+    fn check_connections(&mut self) {
+        self.check_devices(Checking::Everything);
+    }
+
+    /// The same, for some or all of the rig.
+    fn check_devices(&mut self, scope: Checking) {
+        // A run owns its devices exclusively; opening them from here would be
+        // taking them away from it.
+        if self.run != RunState::Stopped {
+            return;
+        }
+
+        // One at a time: two threads opening the same port would have the
+        // second fail for no reason but the first, and report a red dot for
+        // a device that is sitting there working.
+        if self.connection_check.is_some() {
+            self.wanted_check = Some(match self.wanted_check.take() {
+                // Two different devices changed while one check ran. Rather
+                // than choose between them, ask about everything.
+                Some(already) if already != scope => Checking::Everything,
+                _ => scope,
+            });
+            return;
+        }
+
+        let mut config = self.config.clone();
+        if let Checking::Just(name) = &scope {
+            config.devices.retain(|device| &device.info.name == name);
+        }
+        if config.devices.is_empty() {
+            return;
+        }
+
+        let (sender, receiver) = mpsc::channel();
+
+        thread::spawn(move || {
+            let found: Checked = match lumberdaq::daq::Daq::from_config(config) {
+                Ok(mut daq) => {
+                    let report = daq.connect();
+                    let mut answers: Vec<Answered> = report
+                        .connected
+                        .into_iter()
+                        .map(|device| Answered { device, connected: true, why: None })
+                        .collect();
+                    answers.extend(report.failed.into_iter().map(|(device, why)| Answered {
+                        device,
+                        connected: false,
+                        why: Some(why),
+                    }));
+                    // Dropped here, which is what lets go: a serial reader is
+                    // stopped and a Pico unit is closed on the way out.
+                    drop(daq);
+                    Ok(answers)
+                }
+                Err(problem) => Err(problem.to_string()),
+            };
+
+            let _ = sender.send(found);
+        });
+
+        self.connection_check = Some(receiver);
+    }
+
+
+    /// Take the answer, if the check has finished.
+    fn collect_connection_check(&mut self) {
+        let Some(check) = self.connection_check.as_ref() else { return };
+
+        match check.try_recv() {
+            Ok(Ok(answers)) => {
+                self.connection_check = None;
+
+                let (mut answered, total) = (0, answers.len());
+
+                for answer in answers {
+                    if let Some(found) =
+                        self.devices.iter_mut().find(|found| found.name == answer.device)
+                    {
+                        found.connected = Some(answer.connected);
+                    }
+                    match answer.why {
+                        Some(why) => {
+                            self.note(format!("{} did not answer: {}", answer.device, why))
+                        }
+                        None => answered += 1,
+                    }
+                }
+
+                // One line whether or not anything is wrong. Reporting only
+                // failures reads well until nothing fails, and then silence
+                // means both "every device is there" and "nothing ever
+                // looked" - which is exactly the doubt this is here to
+                // settle.
+                self.note(format!("checked the devices: {} of {} answered", answered, total));
+            }
+            Ok(Err(problem)) => {
+                self.connection_check = None;
+                self.note(format!("could not check the devices: {}", problem));
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => self.connection_check = None,
+        }
+
+        // Only once the last one has let go of the hardware.
+        if self.connection_check.is_none() {
+            if let Some(scope) = self.wanted_check.take() {
+                self.check_devices(scope);
             }
         }
     }
@@ -3040,6 +3220,9 @@ impl AppDaq {
                 }
             }
             self.run = RunState::Stopped;
+            // The devices are free again, and whether they are still there is
+            // worth knowing before the next run rather than during it.
+            self.check_connections();
             self.set_plot_panning(true);
             self.note("acquisition stopped".to_string());
         }
@@ -3380,7 +3563,7 @@ impl AppDaq {
         // A thread that will have an answer shortly is a third reason: without
         // this the answer would sit in the channel until something else woke
         // the interface up.
-        let asking = self.pico_probe.is_some();
+        let asking = self.pico_probe.is_some() || self.connection_check.is_some();
         if reading || owed || asking || settling {
             listening.push(window::frames().map(|_| Message::Tick));
         }
@@ -5362,8 +5545,24 @@ impl AppDaq {
             }))
             .spacing(5);
 
+        // Asking is a press rather than something that happens on a timer:
+        // opening a serial port asserts DTR and resets most boards, so a rig
+        // is checked when somebody wants to know, not every half minute.
+        let check_button = hint(
+            button(refresh_cw().size(14))
+                .style(button::text)
+                .padding(4)
+                .on_press_maybe(match self.run == RunState::Stopped {
+                    true => Some(Message::ConnectionsChecked),
+                    // A run owns the devices; there is nothing to ask.
+                    false => None,
+                }),
+            "Check the devices are there",
+        );
+
         self.pane(
-            row![text("Devices"), space::horizontal(), add_device_button]
+            row![text("Devices"), space::horizontal(), check_button, add_device_button]
+                .spacing(2)
                 .align_y(Center),
             device_list.into(),
         )
