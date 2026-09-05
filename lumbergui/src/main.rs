@@ -1,4 +1,5 @@
 mod acquisition;
+mod devicewatch;
 mod logbook;
 mod look;
 mod settings;
@@ -1271,6 +1272,8 @@ enum Message {
     ModeChosen(Mode),
     RunsRefreshed,
     ConnectionsChecked,
+    /// Windows says something was plugged in or unplugged.
+    DevicesChanged,
     ToggleRun(usize),
     ToggleRunDevice(usize, usize),
     /// The pointer entered or left a plot, while something is being dragged.
@@ -1743,6 +1746,21 @@ impl AppDaq {
             }
             Message::RunsRefreshed => self.load_runs(),
             Message::ConnectionsChecked => self.check_connections(),
+            Message::DevicesChanged => {
+                // Said whether or not it leads to a check, because "something
+                // was plugged in" is itself worth having in a log: it dates a
+                // cable being knocked, which is otherwise only visible as
+                // readings that stop.
+                self.note("something was plugged in or unplugged".to_string());
+
+                // What changed is not said in terms a rig would recognise, so
+                // the rig is asked rather than guessed at. Not while running:
+                // the run owns the devices, and it already reports one that
+                // goes away.
+                if self.run == RunState::Stopped {
+                    self.check_connections();
+                }
+            }
             Message::ToggleRun(run) => {
                 if let Some(run) = self.runs.get_mut(run) {
                     run.expanded = !run.expanded;
@@ -3542,8 +3560,14 @@ impl AppDaq {
 
     fn subscription(&self) -> Subscription<Message> {
         // Watching the pointer costs nothing when nothing moves, so it is
-        // always on.
-        let mut listening = vec![event::listen_with(watch_pointer)];
+        // always on. The same is true of listening for a device: nothing
+        // happens until Windows says something has, and then it wakes the
+        // window - which a plain channel could not do while the window has
+        // stopped asking to be drawn.
+        let mut listening = vec![
+            event::listen_with(watch_pointer),
+            Subscription::run(devicewatch::changes),
+        ];
 
         // Frames are expensive: iced rebuilds the whole widget tree for every
         // message, so subscribing to them is asking for that sixty times a

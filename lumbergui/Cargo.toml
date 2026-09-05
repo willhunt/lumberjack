@@ -33,6 +33,18 @@ resvg = { version = "0.45", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# Already in the tree by way of ctrlc, rfd and softbuffer. Named here so the
+# interface can hear from Windows when a device is plugged in or unplugged,
+# rather than opening every device on a timer to find out - which would reset
+# a serial board every time it looked.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 # Only to give the executable its icon and its name in Explorer, which has to
 # be compiled into the binary before it runs. `resvg` again, so the icon is
 # rendered from the same logo the interface draws rather than from a second
