@@ -5632,7 +5632,7 @@ impl AppDaq {
                 .style(button::text)
                 .padding(4)
                 .on_press(Message::AddDeviceOpened),
-            "Add a device",
+            "Add device",
         );
 
         let device_list =
@@ -5679,19 +5679,19 @@ impl AppDaq {
                     // of what it is called.
                     container(connection_dot(device.health()))
                         .padding(padding::left(6)),
-                    space::horizontal(),
+                    // space::horizontal(),
                     // Adding a channel is a change to the rig like
                     // any other, so it waits for the run to stop.
-                    hint(
-                        button(circle_plus().size(14))
-                            .style(button::text)
-                            .padding(4)
-                            .on_press_maybe(match self.rig_editable() {
-                                true => add,
-                                false => None,
-                            }),
-                        "Add a channel to this device",
-                    ),
+                    // hint(
+                    //     button(add_channel_mark(self.rig_editable()))
+                    //         .style(button::text)
+                    //         .padding(4)
+                    //         .on_press_maybe(match self.rig_editable() {
+                    //             true => add,
+                    //             false => None,
+                    //         }),
+                    //     "Add channel",
+                    // ),
                 ]
                 .align_y(Center);
 
@@ -5852,7 +5852,7 @@ impl AppDaq {
         // owed an explanation for why a recorded run has no delete.
         let remove = self.delete_selected().map(|message| {
             Element::from(
-                button(trash_two().size(14))
+                button(trash_two().size(16))
                     .style(danger_on_hover)
                     .padding(4)
                     .on_press(message),
