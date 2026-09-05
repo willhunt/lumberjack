@@ -3,6 +3,7 @@ use crate::daq::DaqInfo;
 use crate::device::DeviceInfo;
 use crate::hardware::{ HardwareConfig, SampleRate };
 use serde::{ Deserialize, Serialize };
+use std::collections::BTreeSet;
 
 /// The description of a measurement setup: which devices, which channels,
 /// which ports. Enough to rebuild the whole thing, and nothing else.
@@ -40,6 +41,32 @@ pub struct DeviceConfig {
 /// for configs written before the setting existed.
 pub fn default_read_interval_ms() -> u64 {
     100
+}
+
+/// What a merge took from another configuration, and what it left behind.
+///
+/// Handed back rather than printed. Nothing in this crate writes to stdout,
+/// and whoever asked for the merge is the one who knows where a line goes -
+/// a log pane, a terminal, or nowhere at all.
+#[derive(Debug, Default, PartialEq)]
+pub struct Merged {
+    /// Devices taken, by name.
+    pub devices: Vec<String>,
+    /// Calculated channels taken, by name.
+    pub calculated: Vec<String>,
+    /// What was left behind, each with the reason it was.
+    pub skipped: Vec<(String, String)>,
+}
+
+impl Merged {
+    /// Whether anything at all came across.
+    ///
+    /// Skipping everything is a perfectly ordinary outcome - merging a file
+    /// that is already in the project does exactly that - but it is worth
+    /// saying differently from having added something.
+    pub fn took_nothing(&self) -> bool {
+        self.devices.is_empty() && self.calculated.is_empty()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -84,6 +111,100 @@ impl DaqConfig {
     /// what a calculated channel works out is usually the quantity somebody
     /// actually wanted, and the last thing to hide from a plot.
     ///
+    /// Take everything from another configuration that this one has room for.
+    ///
+    /// The point is a library: a file of devices somebody keeps to hand and
+    /// adds to whatever they are setting up. So only the devices and the
+    /// calculated channels cross over. The other file's name, its author and
+    /// anything else about the project it came from stay where they are.
+    ///
+    /// This configuration wins every disagreement. A device whose name is
+    /// already here is left alone *entirely* rather than merged into, because
+    /// a channel's binding - which field of a serial frame, which input of a
+    /// Pico - only means something beside the hardware settings it was written
+    /// against. Adding a channel bound to field 3 to a device reading a
+    /// different frame would record the wrong number without complaining,
+    /// which is the one failure worth going out of the way to avoid.
+    ///
+    /// Nothing is renamed and nothing is overwritten, so merging the same file
+    /// twice does nothing the second time.
+    pub fn merge(&mut self, other: DaqConfig) -> Merged {
+        let mut report = Merged::default();
+
+        for device in other.devices {
+            let name = device.info.name.clone();
+            if self.devices.iter().any(|have| have.info.name == name) {
+                report
+                    .skipped
+                    .push((name, "a device of that name is already here".to_string()));
+                continue;
+            }
+            self.devices.push(device);
+            report.devices.push(name);
+        }
+
+        if let Some(incoming) = other.calculated {
+            self.merge_calculated(incoming, &mut report);
+        }
+
+        report
+    }
+
+    /// The calculated half of a merge, once the devices have arrived.
+    ///
+    /// Its own rule, because a calculated channel is not a device: it reads
+    /// measured channels by name, and one whose inputs are not here would
+    /// compile, load, and then quietly never produce a sample, because the
+    /// trigger it waits on would never arrive. Silence like that is worse than
+    /// an error, so it is left behind and said so.
+    fn merge_calculated(&mut self, incoming: CalculatedDevice, report: &mut Merged) {
+        // Worked out after the devices above, so a channel may read one that
+        // arrived in the same merge. A name that matched an existing device
+        // resolves to *that* device's channel, which is the same rule applied
+        // one level down: what is already here wins.
+        let available: BTreeSet<ChannelRef> = self.available_inputs().into_iter().collect();
+
+        // Whether there was one before decides whether to put one back: an
+        // empty calculated device is still a deliberate part of a setup, and a
+        // merge that added nothing should not quietly remove it.
+        let existed = self.calculated.is_some();
+        let mut here = self
+            .calculated
+            .take()
+            .unwrap_or(CalculatedDevice { info: incoming.info, channels: Vec::new() });
+
+        for channel in incoming.channels {
+            let name = channel.info.name.clone();
+
+            if here.channels.iter().any(|have| have.info.name == name) {
+                report.skipped.push((
+                    name,
+                    "a calculated channel of that name is already here".to_string(),
+                ));
+                continue;
+            }
+
+            let missing: Vec<String> = channel
+                .inputs
+                .values()
+                .filter(|input| !available.contains(input))
+                .map(|input| input.to_string())
+                .collect();
+
+            if !missing.is_empty() {
+                report.skipped.push((name, format!("it reads {}", missing.join(" and "))));
+                continue;
+            }
+
+            here.channels.push(channel);
+            report.calculated.push(name);
+        }
+
+        if existed || !here.channels.is_empty() {
+            self.calculated = Some(here);
+        }
+    }
+
     /// Calculated channels come last, as they do in the tree and in the
     /// results: they are worked out from what precedes them.
     pub fn all_channels(&self) -> Vec<ChannelRef> {
@@ -112,5 +233,175 @@ impl DeviceConfig {
             SampleRate::PerRead => Some(std::time::Duration::from_millis(self.read_interval_ms)),
             SampleRate::Unknown => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::calculated::CalculatedChannel;
+    use crate::channel::ChannelInfo;
+    use crate::hardware::mock_hardware::{
+        MockHardwareChannel, MockHardwareConfig, MockHardwareInput,
+    };
+    use std::collections::BTreeMap;
+
+    fn setup(devices: Vec<DeviceConfig>) -> DaqConfig {
+        DaqConfig {
+            info: DaqInfo { name: "a project".to_string(), author: "somebody".to_string() },
+            devices,
+            calculated: None,
+        }
+    }
+
+    /// A mock device of a given name, with the named channels on it.
+    fn device(name: &str, channels: &[&str]) -> DeviceConfig {
+        DeviceConfig {
+            info: DeviceInfo { name: name.to_string() },
+            read_interval_ms: 100,
+            hardware: HardwareConfig::MockHardware(MockHardwareConfig {
+                acquisition: Default::default(),
+                channels: channels
+                    .iter()
+                    .map(|channel| MockHardwareChannel {
+                        info: ChannelInfo {
+                            name: channel.to_string(),
+                            ..Default::default()
+                        },
+                        input: MockHardwareInput::Constant(1.0),
+                    })
+                    .collect(),
+            }),
+        }
+    }
+
+    /// A calculated channel reading one measured channel.
+    fn calculated(name: &str, reads: (&str, &str)) -> CalculatedChannel {
+        let mut inputs = BTreeMap::new();
+        inputs.insert(
+            "v".to_string(),
+            ChannelRef { device: reads.0.to_string(), channel: reads.1.to_string() },
+        );
+
+        CalculatedChannel {
+            info: ChannelInfo { name: name.to_string(), ..Default::default() },
+            inputs,
+            equation: "v * 2".to_string(),
+        }
+    }
+
+    fn with_calculated(mut config: DaqConfig, channels: Vec<CalculatedChannel>) -> DaqConfig {
+        config.calculated = Some(CalculatedDevice {
+            info: DeviceInfo { name: "Calculated".to_string() },
+            channels,
+        });
+        config
+    }
+
+    #[test]
+    fn a_device_with_a_name_of_its_own_is_taken() {
+        let mut project = setup(vec![device("Arduino", &["temp"])]);
+        let report = project.merge(setup(vec![device("Pico", &["cold junction"])]));
+
+        assert_eq!(report.devices, vec!["Pico".to_string()]);
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        assert_eq!(project.devices.len(), 2);
+    }
+
+    #[test]
+    fn a_device_whose_name_is_taken_is_left_behind_whole() {
+        // Not merged into. The incoming channel is bound to hardware settings
+        // that are not the ones here, so adding it would read some other
+        // device's field 3.
+        let mut project = setup(vec![device("Arduino", &["temp"])]);
+        let report = project.merge(setup(vec![device("Arduino", &["temp", "flow"])]));
+
+        assert!(report.devices.is_empty(), "{:?}", report.devices);
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].0, "Arduino");
+        assert!(report.skipped[0].1.contains("already here"), "{}", report.skipped[0].1);
+
+        assert_eq!(project.devices.len(), 1);
+        assert_eq!(project.devices[0].hardware.channel_infos().len(), 1, "left alone entirely");
+    }
+
+    #[test]
+    fn merging_the_same_file_twice_does_nothing_the_second_time() {
+        let library = setup(vec![device("Pico", &["cold junction"])]);
+
+        let mut project = setup(vec![]);
+        project.merge(library.clone());
+        let again = project.merge(library);
+
+        assert!(again.took_nothing());
+        assert_eq!(project.devices.len(), 1);
+    }
+
+    #[test]
+    fn the_other_projects_name_does_not_come_with_its_devices() {
+        // A library is a file of devices. Whose project it was written in is
+        // not something to inherit.
+        let mut project = setup(vec![]);
+        let mut library = setup(vec![device("Pico", &["cold junction"])]);
+        library.info.name = "somebody else's rig".to_string();
+
+        project.merge(library);
+
+        assert_eq!(project.info.name, "a project");
+        assert_eq!(project.info.author, "somebody");
+    }
+
+    #[test]
+    fn a_calculated_channel_may_read_a_device_arriving_beside_it() {
+        // The devices land first, so a library holding a device and a channel
+        // that reads it works as one piece.
+        let mut project = setup(vec![]);
+        let library = with_calculated(
+            setup(vec![device("Pico", &["cold junction"])]),
+            vec![calculated("doubled", ("Pico", "cold junction"))],
+        );
+
+        let report = project.merge(library);
+
+        assert_eq!(report.devices, vec!["Pico".to_string()]);
+        assert_eq!(report.calculated, vec!["doubled".to_string()]);
+    }
+
+    #[test]
+    fn a_calculated_channel_reading_something_that_is_not_here_is_left_behind() {
+        // It would compile and load, and then never produce a sample, because
+        // the trigger it waits on would never arrive. Silence is worse than
+        // being told.
+        let mut project = setup(vec![]);
+        let library =
+            with_calculated(setup(vec![]), vec![calculated("doubled", ("Pico", "cold junction"))]);
+
+        let report = project.merge(library);
+
+        assert!(report.calculated.is_empty(), "{:?}", report.calculated);
+        assert_eq!(report.skipped.len(), 1);
+        assert!(
+            report.skipped[0].1.contains("Pico/cold junction"),
+            "the reason should name what is missing: {}",
+            report.skipped[0].1
+        );
+        assert!(project.calculated.is_none(), "nothing to put it in");
+    }
+
+    #[test]
+    fn a_calculated_channel_whose_name_is_taken_is_left_behind() {
+        let project = setup(vec![device("Pico", &["cold junction"])]);
+        let mut project =
+            with_calculated(project, vec![calculated("doubled", ("Pico", "cold junction"))]);
+
+        let library = with_calculated(
+            setup(vec![]),
+            vec![calculated("doubled", ("Pico", "cold junction"))],
+        );
+        let report = project.merge(library);
+
+        assert!(report.calculated.is_empty());
+        assert_eq!(report.skipped[0].0, "doubled");
+        assert_eq!(project.calculated.expect("still there").channels.len(), 1);
     }
 }

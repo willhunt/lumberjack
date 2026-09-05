@@ -30,6 +30,7 @@ use iced_plot::{
 use lumberdaq::calculated::ChannelRef;
 use lumberdaq::channel::{Channel, Scale};
 use lumberdaq::config::DaqConfig;
+use lumberdaq::configuration::read_configuration_file;
 use lumberdaq::daq::DaqInfo;
 use lumberdaq::datapoint::DataPoint;
 // Qualified rather than imported: `Acquisition` here is this file's own struct
@@ -1367,6 +1368,8 @@ enum Message {
     FileMenuToggled,
     Exported,
     ProjectOpened,
+    /// Take the devices out of another configuration file into this project.
+    DevicesImported,
     ProjectCreated,
     DeviceRenamed(usize, String),
     DeviceIntervalChanged(usize, u64),
@@ -2249,12 +2252,76 @@ impl AppDaq {
                 // window behind it is meant to be waiting. Doing it without an
                 // async runtime is worth more here than not blocking during a
                 // dialog nobody can see past.
-                if let Some(directory) = rfd::FileDialog::new()
-                    .set_title("Open project")
+                // The file rather than the folder it is in. A folder
+                // picker hides files, so every candidate folder looks alike
+                // and there is no way to see which one holds a project.
+                // Pointing at the config says which, and the project is the
+                // folder around it.
+                let Some(config) = rfd::FileDialog::new()
+                    .set_title("Open project: choose its config.json")
+                    .add_filter("Project", &["json"])
                     .set_directory(self.pick_from())
-                    .pick_folder()
-                {
-                    self.open_project(directory);
+                    .pick_file()
+                else {
+                    return;
+                };
+
+                match config.parent() {
+                    Some(directory) => self.open_project(directory.to_path_buf()),
+                    // A path with no parent is a bare file name, which a
+                    // picker does not produce, but saying so beats unwrapping.
+                    None => self.note(format!("{} is not inside a folder", config.display())),
+                }
+            }
+            Message::DevicesImported => {
+                self.file_menu = false;
+
+                // A change to the rig like any other, so it waits for the run
+                // to stop rather than rebuilding the tree under a thread that
+                // is reading from it.
+                if !self.rig_editable() {
+                    self.note("stop the run before adding devices".to_string());
+                    return;
+                }
+
+                let Some(path) = rfd::FileDialog::new()
+                    .set_title("Add devices from a configuration")
+                    .add_filter("Configuration", &["json"])
+                    .set_directory(self.pick_from())
+                    .pick_file()
+                else {
+                    return;
+                };
+
+                let library = match read_configuration_file(&path) {
+                    Ok(library) => library,
+                    Err(problem) => {
+                        self.note(format!("could not read {}: {}", path.display(), problem));
+                        return;
+                    }
+                };
+
+                let report = self.config.merge(library);
+
+                for name in report.devices.iter() {
+                    self.note(format!("added device {}", name));
+                }
+                for name in report.calculated.iter() {
+                    self.note(format!("added calculated channel {}", name));
+                }
+                // Said one by one rather than counted. The whole point of the
+                // rule is that somebody can see what did not come across and
+                // why, and a number cannot say why.
+                for (name, reason) in report.skipped.iter() {
+                    self.note(format!("skipped {}: {}", name, reason));
+                }
+                if report.took_nothing() && report.skipped.is_empty() {
+                    self.note(format!("nothing to add from {}", path.display()));
+                }
+
+                if !report.took_nothing() {
+                    self.reload_devices();
+                    self.rig_changed();
                 }
             }
             Message::ProjectCreated => {
@@ -5844,6 +5911,34 @@ impl AppDaq {
         )
     }
 
+    /// Rebuild the tree from the configuration, keeping what is known.
+    ///
+    /// Devices arriving several at a time is what makes this a rebuild rather
+    /// than an append. A rebuild loses the part that is not in the config -
+    /// whether a device answered when something last looked - so that is
+    /// carried across by name. Not the concern beside it: `rig_changed` clears
+    /// those on any edit, a verdict being about settings that may have moved.
+    ///
+    /// Nothing is re-checked afterwards. A device that has just arrived has
+    /// never been looked at and shows no dot, which is honest, and opening the
+    /// ones already here to tell somebody what they already knew would reset
+    /// every board that takes DTR as a reset.
+    fn reload_devices(&mut self) {
+        let answered: Vec<(String, Option<bool>)> = self
+            .devices
+            .iter()
+            .map(|device| (device.name.clone(), device.connected))
+            .collect();
+
+        self.devices = devices_from(&self.config);
+
+        for device in self.devices.iter_mut() {
+            if let Some((_, connected)) = answered.iter().find(|(name, _)| *name == device.name) {
+                device.connected = *connected;
+            }
+        }
+    }
+
     /// Adding a channel to whatever is selected, where that means anything.
     ///
     /// Only a device takes a channel. A plot, a channel, and anything read
@@ -6253,6 +6348,13 @@ impl AppDaq {
                             vec![
                                 MenuItem::Entry("New project", Some(Message::ProjectCreated)),
                                 MenuItem::Entry("Load project", Some(Message::ProjectOpened)),
+                                // Only with somewhere to put them. Nothing
+                                // else in this menu needs a project either,
+                                // and Export is greyed the same way.
+                                MenuItem::Entry(
+                                    "Load devices",
+                                    self.project.as_ref().map(|_| Message::DevicesImported),
+                                ),
                                 MenuItem::Entry(
                                     "Export",
                                     self.project.as_ref().map(|_| Message::Exported),

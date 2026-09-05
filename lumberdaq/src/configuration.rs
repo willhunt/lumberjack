@@ -80,6 +80,53 @@ fn describe_parent(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DeviceConfig;
+    use crate::daq::DaqInfo;
+    use crate::device::DeviceInfo;
+    use crate::hardware::mock_hardware::MockHardwareConfig;
+    use crate::hardware::HardwareConfig;
+
+    /// A library file written, read back, and merged into a project.
+    ///
+    /// The merge itself is tested against configurations built by hand. This
+    /// is the other half of what somebody adding a library actually does,
+    /// which is that the thing being merged came off a disk: a setting that
+    /// failed to survive the round trip would pass those tests and fail here.
+    #[test]
+    fn devices_can_be_taken_from_a_file_into_a_project() {
+        let path = std::env::temp_dir().join("lumberdaq_library_test.json");
+        let _ = std::fs::remove_file(&path);
+
+        let library = DaqConfig {
+            info: DaqInfo { name: "a library".to_string(), author: "somebody".to_string() },
+            devices: vec![DeviceConfig {
+                info: DeviceInfo { name: "Thermocouples".to_string() },
+                read_interval_ms: 500,
+                hardware: HardwareConfig::MockHardware(MockHardwareConfig::default()),
+            }],
+            calculated: None,
+        };
+        write_configuration_file(&path, &library).expect("a library should write");
+
+        let read = read_configuration_file(&path).expect("and read back");
+
+        let mut project = DaqConfig {
+            info: DaqInfo { name: "a project".to_string(), author: "me".to_string() },
+            devices: vec![],
+            calculated: None,
+        };
+        let report = project.merge(read);
+
+        assert_eq!(report.devices, vec!["Thermocouples".to_string()]);
+        assert_eq!(project.devices.len(), 1);
+        // Taken from the file rather than defaulted, which is what says the
+        // round trip kept the settings and not only the names.
+        assert_eq!(project.devices[0].read_interval_ms, 500);
+        // And the library's own project details stayed behind.
+        assert_eq!(project.info.name, "a project");
+
+        let _ = std::fs::remove_file(&path);
+    }
 
     /// The commonest mistake is running somewhere that is not a project. The
     /// operating system only says a file was not found, without naming it, so
