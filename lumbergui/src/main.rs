@@ -458,6 +458,10 @@ fn window_icon() -> Option<iced::window::Icon> {
 }
 
 pub fn main() -> iced::Result {
+    // Before anything can panic, so that a crash in the interface leaves
+    // something to read rather than only a window that is no longer there.
+    logbook::catch_panics();
+
     iced::application(AppDaq::new, AppDaq::update, AppDaq::view)
         .window(window::Settings {
             // The size the design is drawn at, so a screenshot and the mockup

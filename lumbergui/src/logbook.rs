@@ -106,6 +106,57 @@ fn path() -> Option<PathBuf> {
     Some(crate::settings::config_dir()?.join("lumberjack.log"))
 }
 
+/// Write panics to the log as well as to a console nobody is watching.
+///
+/// A panic in the interface closes the window and prints to a stderr that a
+/// program started from Explorer does not have, so what somebody sees is the
+/// application vanishing. That is the least diagnosable failure there is, and
+/// it is the one most worth a record.
+///
+/// The old hook is kept and called afterwards, so running from a terminal
+/// still prints what it always did.
+pub(crate) fn catch_panics() {
+    let previous = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |info| {
+        // A handle of its own rather than the interface's. Whatever is panicking
+        // may be holding the interface's, and asking a dying thread for
+        // something it owns is how a crash becomes a hang.
+        if let Some(path) = path() {
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+                let stamp = Local::now().format("%Y-%m-%d %H:%M:%S");
+                let at = match info.location() {
+                    Some(location) => format!("{}:{}", location.file(), location.line()),
+                    None => "an unknown place".to_string(),
+                };
+
+                let _ = writeln!(file, "{} - PANIC at {}: {}", stamp, at, describe(info.payload()));
+                // Forced, rather than left to `RUST_BACKTRACE`: nobody setting
+                // an environment variable was ever the person this is for.
+                let _ = writeln!(file, "{}", std::backtrace::Backtrace::force_capture());
+                let _ = file.flush();
+            }
+        }
+
+        previous(info);
+    }));
+}
+
+/// What a panic was about, as far as its payload will say.
+///
+/// A panic carries `Any`, which in practice is the message from `panic!` as
+/// either a literal or a formatted string. Anything else is possible and says
+/// nothing useful, so it is named rather than guessed at.
+fn describe(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "a panic carrying no message".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +201,15 @@ mod tests {
         assert!(written.contains("the second session"), "{}", written);
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_panic_message_is_read_out_of_its_payload() {
+        // The two shapes a panic actually carries: a literal, and a formatted
+        // string. Anything else is possible and worth saying so about.
+        assert_eq!(describe(&"the plot was not there"), "the plot was not there");
+        assert_eq!(describe(&format!("channel {} is missing", 4)), "channel 4 is missing");
+        assert_eq!(describe(&7u32), "a panic carrying no message");
     }
 
     #[test]
